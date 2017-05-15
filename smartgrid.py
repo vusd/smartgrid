@@ -11,6 +11,7 @@ from keras.models import Model
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from scipy.spatial import distance
+import sklearn.preprocessing as preprocessing
 import scipy
 import math
 import numbers
@@ -104,15 +105,38 @@ def analyze_images(images):
     pca_features = pca.transform(features)
     return np.asarray(pca_features)
 
-def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
+
+def fit_to_unit_square(points):
+    points -= points.min(axis=0)
+    points /= points.max(axis=0)
+    return points
+
+def run_tsne(input_glob, left_image, right_image, left_right_scale,
+        output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, do_colors):
     images, num_images, width, height = get_image_list(input_glob, width, height)
+
+    left_image_index = None
+    right_image_index = None
+    # scale X by left/right axis
+    if left_image is not None and right_image is not None:
+        left_image_index = images.index(left_image)
+        right_image_index = images.index(right_image)
+
     num_images = width * height
     avg_colors = analyze_images_colors(images)
     if do_colors:
         X = avg_colors
     else:
         X = analyze_images(images)
+
+    if left_image_index is not None:
+        lr_vector = X[right_image_index] - X[left_image_index]
+        # perhaps overkill for normalizing one vector, but...
+        lr_vector = preprocessing.normalize(lr_vector.reshape(1,-1))[0]
+        # todo: confirm this is how to stretch by a vector
+        X = np.add(X, X * lr_vector * left_right_scale)
+
     print("Running t-SNE on {} images...".format(num_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
 
@@ -128,9 +152,7 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
     with open(os.path.join(output_path, "points.json"), 'w') as outfile:
         json.dump(data, outfile)
 
-    data2d = tsne
-    data2d -= data2d.min(axis=0)
-    data2d /= data2d.max(axis=0)
+    data2d = fit_to_unit_square(tsne)
     plt.figure(figsize=(8, 8))
     plt.xlim(-0.1, 1.1)
     plt.ylim(-0.1, 1.1)
@@ -146,8 +168,47 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
     # else:
     #     graph_colors = colors
     grays = np.linspace(0, 0.8, len(data2d))
-    plt.scatter(data2d[:,0], data2d[:,1], c=avg_colors, edgecolors='none', marker='o', s=24)  
+    plt.scatter(data2d[:,0], data2d[:,1], c=avg_colors, edgecolors='none', marker='o', s=24)
+    if left_image_index is not None:
+        plt.scatter(data2d[left_image_index:left_image_index+1,0],
+            data2d[left_image_index:left_image_index+1,1],
+            facecolors='none', edgecolors='r', marker='o', s=24*3)
+        plt.scatter(data2d[right_image_index:right_image_index+1,0],
+            data2d[right_image_index:right_image_index+1,1],
+            facecolors='none', edgecolors='g', marker='o', s=24*3)
     plt.savefig(os.path.join(output_path, "tsne.png"), bbox_inches='tight')
+
+    if left_image_index is not None:
+        origin = data2d[left_image_index]
+        data2d = data2d - origin
+        dest = data2d[right_image_index]
+        x_axis = np.array([1, 0])
+        theta = np.arctan2(dest[1],dest[0])
+        print("Spin angle is {}".format(np.rad2deg(theta)))
+        # theta = np.deg2rad(90)
+        # print("Spin angle is {}".format(np.rad2deg(theta)))
+        # # http://scipython.com/book/chapter-6-numpy/examples/creating-a-rotation-matrix-in-numpy/
+        a_c, a_s = np.cos(theta), np.sin(theta)
+        R = np.matrix([[a_c, -a_s], [a_s, a_c]])
+        data2d = np.array(data2d * R)
+        # print("IS: ", data2d.shape)
+        data2d = fit_to_unit_square(data2d)
+
+        # TODO: this is a nasty cut-n-paste of above with different filename
+        plt.figure(figsize=(8, 8))
+        plt.xlim(-0.1, 1.1)
+        plt.ylim(-0.1, 1.1)
+        plt.gca().invert_yaxis()
+
+        plt.scatter(data2d[:,0], data2d[:,1], c=avg_colors, edgecolors='none', marker='o', s=24)
+        if left_image_index is not None:
+            plt.scatter(data2d[left_image_index:left_image_index+1,0],
+                data2d[left_image_index:left_image_index+1,1],
+                facecolors='none', edgecolors='r', marker='o', s=48)
+            plt.scatter(data2d[right_image_index:right_image_index+1,0],
+                data2d[right_image_index:right_image_index+1,1],
+                facecolors='none', edgecolors='g', marker='o', s=48)
+        plt.savefig(os.path.join(output_path, "tsne_spun.png"), bbox_inches='tight')
 
     xv, yv = np.meshgrid(np.linspace(0, 1, width), np.linspace(0, 1, height))
     grid = np.dstack((xv, yv)).reshape(-1, 2)
@@ -171,6 +232,13 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
     for start, end, c in zip(data2d, grid_jv2, avg_colors):
         plt.arrow(start[0], start[1], end[0] - start[0], end[1] - start[1],
                   color=c, head_length=0.01, head_width=0.01)
+        if left_image_index is not None:
+            plt.scatter(data2d[left_image_index:left_image_index+1,0],
+                data2d[left_image_index:left_image_index+1,1],
+                facecolors='none', edgecolors='r', marker='o', s=48)
+            plt.scatter(data2d[right_image_index:right_image_index+1,0],
+                data2d[right_image_index:right_image_index+1,1],
+                facecolors='none', edgecolors='g', marker='o', s=48)
     plt.savefig(os.path.join(output_path, 'movement.png'), bbox_inches='tight')
 
     n_images = np.asarray(images)
@@ -190,6 +258,12 @@ def main():
     parser = argparse.ArgumentParser(description="Deep learning grid layout")
     parser.add_argument('--input-glob', default=None,
                         help="use file glob source of images")
+    parser.add_argument('--left-image', default=None,
+                        help="use file as example of left")
+    parser.add_argument('--right-image', default=None,
+                        help="use file as example of right")
+    parser.add_argument('--left-right-scale', default=2.0, type=float,
+                        help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
                          help='path to where to put output files')
     parser.add_argument('--num-dimensions', default=2, type=int,
@@ -206,7 +280,8 @@ def main():
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
-    run_tsne(args.input_glob, args.output_path, args.num_dimensions, 
+    run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
+             args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.do_colors)
 
 if __name__ == '__main__':
