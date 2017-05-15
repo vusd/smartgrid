@@ -11,7 +11,6 @@ from keras.models import Model
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from scipy.spatial import distance
-import sklearn.preprocessing as preprocessing
 import scipy
 import math
 import numbers
@@ -106,9 +105,16 @@ def analyze_images(images):
     return np.asarray(pca_features)
 
 
-def fit_to_unit_square(points):
+def fit_to_unit_square(points, width, height):
+    x_scale = 1.0
+    y_scale = 1.0
+    if (width > height):
+        y_scale = height / width
+    elif(width < height):
+        x_scale = width / height
     points -= points.min(axis=0)
     points /= points.max(axis=0)
+    points = points * [x_scale, y_scale]
     return points
 
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
@@ -131,11 +137,18 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         X = analyze_images(images)
 
     if left_image_index is not None:
-        lr_vector = X[right_image_index] - X[left_image_index]
-        # perhaps overkill for normalizing one vector, but...
-        lr_vector = preprocessing.normalize(lr_vector.reshape(1,-1))[0]
         # todo: confirm this is how to stretch by a vector
-        X = np.add(X, X * lr_vector * left_right_scale)
+        lr_vector = X[right_image_index] - X[left_image_index]
+        lr_vector = lr_vector / np.linalg.norm(lr_vector)
+        X_new = np.zeros_like(X)
+        for i in range(len(X)):
+            len_x = np.linalg.norm(X[i])
+            norm_x = X[i] / len_x
+            scale_factor = 1.0 + left_right_scale * (1.0 + np.dot(norm_x, lr_vector))
+            new_length = len_x * scale_factor
+            # print("Vector {}: length went from {} to {}".format(i, len_x, new_length))
+            X_new[i] = new_length * norm_x
+        X = X_new
 
     print("Running t-SNE on {} images...".format(num_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
@@ -152,7 +165,10 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     with open(os.path.join(output_path, "points.json"), 'w') as outfile:
         json.dump(data, outfile)
 
-    data2d = fit_to_unit_square(tsne)
+    if left_image_index is not None:
+        data2d = fit_to_unit_square(tsne, 1, 1)
+    else:
+        data2d = fit_to_unit_square(tsne, width, height)
     plt.figure(figsize=(8, 8))
     plt.xlim(-0.1, 1.1)
     plt.ylim(-0.1, 1.1)
@@ -192,7 +208,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         R = np.matrix([[a_c, -a_s], [a_s, a_c]])
         data2d = np.array(data2d * R)
         # print("IS: ", data2d.shape)
-        data2d = fit_to_unit_square(data2d)
+        data2d = fit_to_unit_square(data2d, width, height)
 
         # TODO: this is a nasty cut-n-paste of above with different filename
         plt.figure(figsize=(8, 8))
@@ -210,7 +226,12 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
                 facecolors='none', edgecolors='g', marker='o', s=48)
         plt.savefig(os.path.join(output_path, "tsne_spun.png"), bbox_inches='tight')
 
-    xv, yv = np.meshgrid(np.linspace(0, 1, width), np.linspace(0, 1, height))
+    max_width, max_height = 1, 1
+    if (width > height):
+        max_height = height / width
+    elif(width < height):
+        max_width = width / height
+    xv, yv = np.meshgrid(np.linspace(0, max_width, width), np.linspace(0, max_height, height))
     grid = np.dstack((xv, yv)).reshape(-1, 2)
     # print(grid.shape)
     # print(data2d.shape)
@@ -262,7 +283,7 @@ def main():
                         help="use file as example of left")
     parser.add_argument('--right-image', default=None,
                         help="use file as example of right")
-    parser.add_argument('--left-right-scale', default=2.0, type=float,
+    parser.add_argument('--left-right-scale', default=4.0, type=float,
                         help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
                          help='path to where to put output files')
