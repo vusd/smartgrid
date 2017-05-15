@@ -178,7 +178,7 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
     filelist = os.path.join(output_path, "filelist.txt")
     with open(filelist, "w") as text_file:
         for image in image_grid:
-            text_file.write("{}\n".format(image))
+            text_file.write("\"{}\"\n".format(image))
         # for i in col_assigns2:
         #     text_file.write("{}\n".format(images[i]))
 
@@ -192,11 +192,11 @@ def main():
                         help="use file glob source of images")
     parser.add_argument('--output-path', 
                          help='path to where to put output files')
-    parser.add_argument('--num-dimensions', default=2, 
+    parser.add_argument('--num-dimensions', default=2, type=int,
                         help='dimensionality of t-SNE points')
-    parser.add_argument('--perplexity', default=30,
+    parser.add_argument('--perplexity', default=30, type=int,
                         help='perplexity of t-SNE')
-    parser.add_argument('--learning-rate', default=150,
+    parser.add_argument('--learning-rate', default=150, type=int,
                         help='learning rate of t-SNE')
     parser.add_argument('--do-colors', default=False, action='store_true',
                         help="Use average color as feature")
