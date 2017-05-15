@@ -22,8 +22,15 @@ import matplotlib.pyplot as plt
 from braceexpand import braceexpand
 import glob
 
-# https://github.com/src-d/lapjv
-import lapjv
+# import with fallback behavior
+using_lapjv1 = False
+try:
+    # https://github.com/src-d/lapjv
+    import lapjv
+except ImportError:
+    # https://github.com/dribnet/lapjv1
+    using_lapjv1 = True
+    import lapjv1
 
 def real_glob(rglob):
     glob_list = braceexpand(rglob)
@@ -150,7 +157,11 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
     cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
 
-    row_assigns2, col_assigns2, min_cost2 = lapjv.lapjv(cost, verbose=True, force_doubles=False)
+    if using_lapjv1:
+        min_cost2, row_assigns2, col_assigns2 = lapjv1.lapjv1(cost)
+    else:
+        # note slightly different API
+        row_assigns2, col_assigns2, min_cost2 = lapjv.lapjv(cost, verbose=True, force_doubles=False)
     grid_jv2 = grid[col_assigns2]
     # print(col_assigns2.shape)
     plt.figure(figsize=(8, 8))
@@ -164,14 +175,15 @@ def run_tsne(input_glob, output_path, tsne_dimensions, tsne_perplexity,
 
     n_images = np.asarray(images)
     image_grid = n_images[row_assigns2]
-    with open("list.txt", "w") as text_file:
+    filelist = os.path.join(output_path, "filelist.txt")
+    with open(filelist, "w") as text_file:
         for image in image_grid:
             text_file.write("{}\n".format(image))
         # for i in col_assigns2:
         #     text_file.write("{}\n".format(images[i]))
 
-    command = "montage @list.txt -geometry +0+0 -tile {}x{} {}".format(width,
-        height, os.path.join(output_path, "all.jpg"))
+    command = "montage @{} -geometry +0+0 -tile {}x{} {}".format(filelist,
+        width, height, os.path.join(output_path, "grid.jpg"))
     os.system(command)
 
 def main():
