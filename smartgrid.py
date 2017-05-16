@@ -275,6 +275,11 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         width, height, os.path.join(output_path, "grid.jpg"))
     os.system(command)
 
+    if left_image_index is not None:
+        command = "montage {} {} -geometry +0+0 -tile 2x1 {}".format(
+            left_image, right_image, os.path.join(output_path, "left_right.jpg"))
+        os.system(command)
+
 def main():
     parser = argparse.ArgumentParser(description="Deep learning grid layout")
     parser.add_argument('--input-glob', default=None,
