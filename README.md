@@ -35,6 +35,6 @@ python smartgrid.py \
 This set of arguments creates a non-square grid and also suggests that the `FR.png` image (🇫🇷) should be laid out to the left of the `NL.png` image (🇳🇱). The left/right image flags also try to influence groupings by exaggerating the differences between these anchors (this stretching can be disabled by setting `--left-right-scale 0.0`).
 
 Currently requires imagemagick (montage), keras 2.x, scipy, sklearn, matplotlib,
-braceexpand, and either [lapjv](https://github.com/src-d/lapjv) or [lapjv1](https://github.com/dribnet/lapjv1).
+braceexpand, tqdm, and either [lapjv](https://github.com/src-d/lapjv) or [lapjv1](https://github.com/dribnet/lapjv1).
 
 Code adapted from @genekogan's [tSNE-images.py](https://github.com/ml4a/ml4a-ofx/blob/master/scripts/tSNE-images.py) and @kylemcdonald's [CloudToGrid](https://github.com/kylemcdonald/CloudToGrid)

@@ -14,6 +14,8 @@ from scipy.spatial import distance
 import scipy
 import math
 import numbers
+import time
+from tqdm import tqdm
 
 import matplotlib
 matplotlib.use('Agg')
@@ -89,11 +91,11 @@ def analyze_images(images):
     input_shape = model.input_shape[1:3]
     # analyze images and grab activations
     activations = []
-    for idx,image_path in enumerate(images):
-        file_path = image_path
+    for idx in tqdm(range(len(images))):
+        file_path = images[idx]
         img = get_image(file_path, input_shape);
         if img is not None:
-            print("getting activations for %s %d/%d" % (image_path,idx,num_images))
+            # print("getting activations for %s %d/%d" % (file_path,idx,num_images))
             acts = feat_extractor.predict(img)[0]
             activations.append(acts)
     # run PCA firt
@@ -117,6 +119,22 @@ def fit_to_unit_square(points, width, height):
     points = points * [x_scale, y_scale]
     return points
 
+def index_from_substring(images, substr):
+    index = None
+    for i in range(len(images)):
+        # print("{} and {} and {}".format(images[i], substr, images[i].find(substr)))
+        if images[i].find(substr) != -1:
+            if index is None:
+                index = i
+            else:
+                raise ValueError("The substring {} is ambiguious: {} and {}".format(
+                    substr, images[index], images[i]))
+    if index is None:
+        raise ValueError("The substring {} was not found in {} images".format(substr, len(images)))
+    else:
+        print("Resolved {} to image {}".format(substr, images[index]))
+    return index
+
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, do_colors):
@@ -126,8 +144,8 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     right_image_index = None
     # scale X by left/right axis
     if left_image is not None and right_image is not None:
-        left_image_index = images.index(left_image)
-        right_image_index = images.index(right_image)
+        left_image_index = index_from_substring(images, left_image)
+        right_image_index = index_from_substring(images, right_image)
 
     num_images = width * height
     avg_colors = analyze_images_colors(images)
@@ -277,7 +295,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
 
     if left_image_index is not None:
         command = "montage {} {} -geometry +0+0 -tile 2x1 {}".format(
-            left_image, right_image, os.path.join(output_path, "left_right.jpg"))
+            images[left_image_index], images[right_image_index], os.path.join(output_path, "left_right.jpg"))
         os.system(command)
 
 def main():
