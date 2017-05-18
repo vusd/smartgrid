@@ -34,6 +34,28 @@ python smartgrid.py \
 
 This set of arguments creates a non-square grid and also suggests that the `FR.png` image (🇫🇷) should be laid out to the left of the `NL.png` image (🇳🇱). The left/right image flags also try to influence groupings by exaggerating the differences between these anchors (this stretching can be disabled by setting `--left-right-scale 0.0`).
 
+The tile argument specifies the number of rows and columns. You can also specify `--aspect-ratio` to have the grid image fit a specific format.
+
+The arrangement is based on a trained neural network, and many model options are available via keras. They are:
+ * vgg16
+ * vgg19
+ * resnet50
+ * inceptionv3
+ * xception
+
+In addition, the specific layer of the network to be used for feature extraction can be provided as well. For example:
+```bash
+python smartgrid.py \
+  --model vgg19 \
+  --layer fc1 \
+  --input-glob 'datasets/someflags/*.png' \
+  --output-path outputs/flag_grid_colors_vgg19_fc1 \
+  --aspect-ratio 1 \
+  --output-path outputs/vgg_fc1_full_01_square
+```
+
+![flag square vgg19_fc1 grid](https://github.com/vusd/smartgrid/releases/download/extras/square_layout.jpg)
+
 Currently requires imagemagick (montage), keras 2.x, scipy, sklearn, matplotlib,
 braceexpand, tqdm, and either [lapjv](https://github.com/src-d/lapjv) or [lapjv1](https://github.com/dribnet/lapjv1).
 

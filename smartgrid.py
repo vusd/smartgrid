@@ -136,7 +136,8 @@ def analyze_images(images, model, layer_name=None, do_crop=False):
     elif model == 'resnet50':
         model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
     elif model == 'inceptionv3':
-        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top, pooling='avg')
+        # todo: add support for different "pooling" options
+        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top)
     elif model == 'xception':
         model = keras.applications.Xception(weights='imagenet', include_top=include_top)
 
