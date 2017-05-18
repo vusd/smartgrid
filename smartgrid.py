@@ -6,7 +6,7 @@ import os
 from os.path import isfile, join
 import keras
 from keras.preprocessing import image
-from keras.applications.imagenet_utils import decode_predictions, preprocess_input
+from keras.applications.imagenet_utils import decode_predictions
 from keras.models import Model
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -41,11 +41,36 @@ def real_glob(rglob):
         files = files + glob.glob(g)
     return sorted(files)
 
-def get_image(path, input_shape):
-    img = image.load_img(path, target_size=input_shape)
+def center_crop(img, target_size):
+     width, height = img.size
+     smaller = width
+     if height < width:
+         smaller = height
+
+     # TODO: this might be off by one
+     left = np.ceil((width - smaller)/2.)
+     top = np.ceil((height - smaller)/2.)
+     right = np.floor((width + smaller)/2.)
+     bottom = np.floor((height + smaller)/2.)
+     img = img.crop((left, top, right, bottom))
+     # print("resizing from {} to {}".format([width, height], target_size))
+     img = img.resize(target_size)
+     return img
+
+def get_image(path, input_shape, do_crop=False):
+    if do_crop:
+        # cropping version
+        img = image.load_img(path)
+        # print(path)
+        img = center_crop(img, target_size=input_shape)
+    else:
+        # scaling version
+        img = image.load_img(path, target_size=input_shape)
+
+    # img.save("sized.png")
+    # print("DONE")
     x = image.img_to_array(img)
     x = np.expand_dims(x, axis=0)
-    x = preprocess_input(x)
     return x
 
 def get_average_color(path):
@@ -83,21 +108,45 @@ def analyze_images_colors(images):
         colors.append(c)
     return np.asarray(colors) / 255.0
 
-def analyze_images(images):
+def analyze_images(images, model, layer_name=None, do_crop=False):
     num_images = len(images)
+
+    preprocess_input = keras.applications.imagenet_utils.preprocess_input
+    input_shape = (224, 224)
+    include_top = (layer_name is not None)
     # make feature_extractor
-    model = keras.applications.VGG16(weights='imagenet', include_top=True)
-    feat_extractor = Model(inputs=model.input, outputs=model.get_layer("fc2").output)
-    input_shape = model.input_shape[1:3]
+    if model == 'vgg16':
+        model = keras.applications.VGG16(weights='imagenet', include_top=include_top)
+    elif model == 'vgg19':
+        model = keras.applications.VGG19(weights='imagenet', include_top=include_top)
+    elif model == 'resnet50':
+        model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
+    elif model == 'inceptionv3':
+        preprocess_input = keras.applications.inception_v3.preprocess_input
+        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top)
+    elif model == 'xception':
+        model = keras.applications.Xception(weights='imagenet', include_top=include_top)
+
+    if model == 'inceptionv3' or model == 'xception':
+        preprocess_input = keras.applications.inception_v3.preprocess_input
+        input_shape = (299, 299)
+
+    if layer_name is None:
+        feat_extractor = model
+    else:
+        feat_extractor = Model(inputs=model.input, outputs=model.get_layer(layer_name).output)
+
     # analyze images and grab activations
     activations = []
     for idx in tqdm(range(len(images))):
         file_path = images[idx]
-        img = get_image(file_path, input_shape);
+        img = get_image(file_path, input_shape, do_crop);
         if img is not None:
+            # preprocess
+            img = preprocess_input(img)
             # print("getting activations for %s %d/%d" % (file_path,idx,num_images))
             acts = feat_extractor.predict(img)[0]
-            activations.append(acts)
+            activations.append(acts.flatten())
     # run PCA firt
     print("Running PCA on %d images..." % len(activations))
     features = np.array(activations)
@@ -137,7 +186,8 @@ def index_from_substring(images, substr):
 
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
-        tsne_learning_rate, width, height, do_colors):
+        tsne_learning_rate, width, height,
+        model, layer, do_colors, do_crop):
     images, num_images, width, height = get_image_list(input_glob, width, height)
 
     left_image_index = None
@@ -152,7 +202,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     if do_colors:
         X = avg_colors
     else:
-        X = analyze_images(images)
+        X = analyze_images(images, model, layer, do_crop)
 
     if left_image_index is not None:
         # todo: confirm this is how to stretch by a vector
@@ -306,6 +356,10 @@ def main():
                         help="use file as example of left")
     parser.add_argument('--right-image', default=None,
                         help="use file as example of right")
+    parser.add_argument('--model', default='vgg16',
+                        help="model to use, one of: vgg16 vgg19 resnet50 inceptionv3 xception")
+    parser.add_argument('--layer', default=None,
+                        help="optional override to set custom model layer")
     parser.add_argument('--left-right-scale', default=4.0, type=float,
                         help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
@@ -318,6 +372,8 @@ def main():
                         help='learning rate of t-SNE')
     parser.add_argument('--do-colors', default=False, action='store_true',
                         help="Use average color as feature")
+    parser.add_argument('--do-crop', default=False, action='store_true',
+                        help="Center crop instead of scale")
     parser.add_argument('--tile', default=None,
                         help="Grid size WxH (eg: 12x12)")
     args = parser.parse_args()
@@ -326,7 +382,8 @@ def main():
         width, height = map(int, args.tile.split("x"))
     run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
-             args.perplexity, args.learning_rate, width, height, args.do_colors)
+             args.perplexity, args.learning_rate, width, height,
+             args.model, args.layer, args.do_colors, args.do_crop)
 
 if __name__ == '__main__':
     main()
