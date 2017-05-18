@@ -16,6 +16,7 @@ import math
 import numbers
 import time
 from tqdm import tqdm
+from PIL import Image
 
 import matplotlib
 matplotlib.use('Agg')
@@ -80,12 +81,25 @@ def get_average_color(path):
         c = [c, c, c]
     return c
 
-def get_image_list(input_glob, width, height):
+def get_image_list(input_glob, width, height, aspect_ratio):
     images = real_glob(input_glob)
-    print("Found {} images".format(len(images)))
-    if width is None:
-        biggest_square = int(math.sqrt(len(images)))
+    num_images = len(images)
+    print("Found {} images".format(num_images))
+    if width is None and aspect_ratio is None:
+        # just have width == height
+        biggest_square = int(math.sqrt(num_images))
         width, height = biggest_square, biggest_square
+    elif width is None:
+        # sniff the aspect ratio of the first file
+        with Image.open(images[0]) as img:
+            im_width = img.size[0]
+            im_height = img.size[1]
+            tile_aspect_ratio =  im_width / im_height
+        height = int(math.sqrt((num_images * tile_aspect_ratio) / aspect_ratio))
+        width = int(num_images / height)
+        print("tile size is {}x{} so aspect of {:.3f} is {}x{} (final: {}x{})".format(
+            im_width, im_height, aspect_ratio, width, height, width*im_width, height*im_height))
+
     max_images = width * height
     images = images[:max_images]
     num_images = len(images)
@@ -122,8 +136,7 @@ def analyze_images(images, model, layer_name=None, do_crop=False):
     elif model == 'resnet50':
         model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
     elif model == 'inceptionv3':
-        preprocess_input = keras.applications.inception_v3.preprocess_input
-        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top)
+        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top, pooling='avg')
     elif model == 'xception':
         model = keras.applications.Xception(weights='imagenet', include_top=include_top)
 
@@ -186,9 +199,9 @@ def index_from_substring(images, substr):
 
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
-        tsne_learning_rate, width, height,
+        tsne_learning_rate, width, height, aspect_ratio,
         model, layer, do_colors, do_crop):
-    images, num_images, width, height = get_image_list(input_glob, width, height)
+    images, num_images, width, height = get_image_list(input_glob, width, height, aspect_ratio)
 
     left_image_index = None
     right_image_index = None
@@ -376,13 +389,15 @@ def main():
                         help="Center crop instead of scale")
     parser.add_argument('--tile', default=None,
                         help="Grid size WxH (eg: 12x12)")
+    parser.add_argument('--aspect-ratio', default=None, type=float,
+                        help="Instead of square, fit image to given aspect ratio")
     args = parser.parse_args()
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
     run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
-             args.perplexity, args.learning_rate, width, height,
+             args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
              args.model, args.layer, args.do_colors, args.do_crop)
 
 if __name__ == '__main__':
