@@ -349,7 +349,8 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     # print(grid.shape)
     # print(data2d.shape)
 
-    cost = distance.cdist(grid, data2d, 'sqeuclidean')
+    cost = distance.cdist(grid, data2d, 'cosine')
+    # cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
 
     if using_lapjv1:
