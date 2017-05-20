@@ -358,7 +358,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     os.system(command)
 
     if left_image_index is not None:
-        command = "montage {} {} -geometry +0+0 -tile 2x1 {}".format(
+        command = "montage '{}' '{}' -geometry +0+0 -tile 2x1 {}".format(
             images[left_image_index], images[right_image_index], os.path.join(output_path, "left_right.jpg"))
         os.system(command)
 
