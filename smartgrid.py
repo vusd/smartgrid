@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from scipy.spatial import distance
 import scipy
+from skimage import color
 import math
 import numbers
 import time
@@ -74,9 +75,19 @@ def get_image(path, input_shape, do_crop=False):
     x = np.expand_dims(x, axis=0)
     return x
 
-def get_average_color(path):
-    c = scipy.misc.imread(path, mode='RGB').mean(axis=(0,1))
-    # WTF indeed (this happens for black)
+def get_average_color(path, colorspace='rgb'):
+    c = scipy.misc.imread(path, mode='RGB')
+    if colorspace == 'lab':
+        # print("CONVERTING TO LAB")
+        # old_color = c
+        c = color.rgb2lab(c)
+        # print("Converted from {} to {}".format(old_color[0], c[0]))
+        c = c.mean(axis=(0,1))
+    else:
+        c = c.mean(axis=(0,1))
+        c = c / 255.0
+
+    # WTF indeed (this happens for black (rgb))
     if isinstance(c, numbers.Number):
         c = [c, c, c]
     return c
@@ -109,20 +120,33 @@ def get_image_list(input_glob, width, height, aspect_ratio):
     print("Using {} images to build {}x{} montage".format(num_images, width, height))
     return images, num_images, width, height
 
-def analyze_images_colors(images):
+def normalize_columns(rawpoints, low=0, high=1):
+    mins = np.min(rawpoints, axis=0)
+    maxs = np.max(rawpoints, axis=0)
+    rng = maxs - mins
+    scaled_points = high - (((high - low) * (maxs - rawpoints)) / rng)
+    return scaled_points
+
+def analyze_images_colors(images, colorspace='rgb'):
     # analyze images and grab activations
     colors = []
     for image_path in images:
         try:
-            c = get_average_color(image_path)
+            c = get_average_color(image_path, colorspace)
         except Exception as e:
             print("Problem reading {}: {}".format(image_path, e))
             c = [0, 0, 0]
         # print(image_path, c)
         colors.append(c)
-    return np.asarray(colors) / 255.0
+    # colors = normalize_columns(colors)
+    return colors
 
 def analyze_images(images, model, layer_name=None, do_crop=False):
+    if model == 'color_lab':
+        return analyze_images_colors(images, colorspace='lab')
+    elif model == 'color' or model == 'color_rgb':
+        return analyze_images_colors(images, colorspace='rgb')
+
     num_images = len(images)
 
     preprocess_input = keras.applications.imagenet_utils.preprocess_input
@@ -169,7 +193,6 @@ def analyze_images(images, model, layer_name=None, do_crop=False):
     pca_features = pca.transform(features)
     return np.asarray(pca_features)
 
-
 def fit_to_unit_square(points, width, height):
     x_scale = 1.0
     y_scale = 1.0
@@ -198,12 +221,29 @@ def index_from_substring(images, substr):
         print("Resolved {} to image {}".format(substr, images[index]))
     return index
 
+def write_list(list, output_path, output_file, quote=False):
+    filelist = os.path.join(output_path, output_file)
+    with open(filelist, "w") as text_file:
+        for item in list:
+            if isinstance(item, np.ndarray):
+                text_file.write("{}\n".format(",".join(map(str,item))))
+            elif quote:
+                text_file.write("\"{}\"\n".format(item))
+            else:
+                text_file.write("{}\n".format(item))
+    return filelist
+
+# def process_image_list(input_glob)
+
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
-        model, layer, do_colors, do_crop):
+        model, layer, do_crop, grid_file, no_imagemagick=False):
+
+    ## compute width,weight from image list and provided defaults
     images, num_images, width, height = get_image_list(input_glob, width, height, aspect_ratio)
 
+    ## Lookup left/right images
     left_image_index = None
     right_image_index = None
     # scale X by left/right axis
@@ -212,11 +252,8 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         right_image_index = index_from_substring(images, right_image)
 
     num_images = width * height
-    avg_colors = analyze_images_colors(images)
-    if do_colors:
-        X = avg_colors
-    else:
-        X = analyze_images(images, model, layer, do_crop)
+    avg_colors = analyze_images_colors(images, 'rgb')
+    X = analyze_images(images, model, layer, do_crop)
 
     if left_image_index is not None:
         # todo: confirm this is how to stretch by a vector
@@ -239,7 +276,9 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     if output_path != '' and not os.path.exists(output_path):
         os.makedirs(output_path)
 
-    # save data to json
+    # save data
+    write_list(images, output_path, "image_files.txt")
+    write_list(X, output_path, "image_vectors.txt")
     data = []
     for i,f in enumerate(images):
         point = [ (tsne[i,k] - np.min(tsne[:,k]))/(np.max(tsne[:,k]) - np.min(tsne[:,k])) for k in range(tsne_dimensions) ]
@@ -255,16 +294,6 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     plt.xlim(-0.1, 1.1)
     plt.ylim(-0.1, 1.1)
     plt.gca().invert_yaxis()
-    # if debug colors...
-    # colors = ['black'] * len(data2d)
-    # colors[0] = 'red'
-    # colors[1] = 'green'
-    # colors[2] = 'blue'
-    # colors[-1] = 'yellow'
-    # if debug_colors:
-    #     graph_colors = X / 255.0
-    # else:
-    #     graph_colors = colors
     grays = np.linspace(0, 0.8, len(data2d))
     plt.scatter(data2d[:,0], data2d[:,1], c=avg_colors, edgecolors='none', marker='o', s=24)
     if left_image_index is not None:
@@ -308,6 +337,8 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
                 facecolors='none', edgecolors='g', marker='o', s=48)
         plt.savefig(os.path.join(output_path, "tsne_spun.png"), bbox_inches='tight')
 
+    write_list(data2d, output_path, "tsne_coords.txt")
+
     max_width, max_height = 1, 1
     if (width > height):
         max_height = height / width
@@ -346,21 +377,20 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
 
     n_images = np.asarray(images)
     image_grid = n_images[row_assigns2]
-    filelist = os.path.join(output_path, "filelist.txt")
-    with open(filelist, "w") as text_file:
-        for image in image_grid:
-            text_file.write("\"{}\"\n".format(image))
-        # for i in col_assigns2:
-        #     text_file.write("{}\n".format(images[i]))
-
-    command = "montage @{} -geometry +0+0 -tile {}x{} {}".format(filelist,
-        width, height, os.path.join(output_path, "grid.jpg"))
-    os.system(command)
-
-    if left_image_index is not None:
-        command = "montage '{}' '{}' -geometry +0+0 -tile 2x1 {}".format(
-            images[left_image_index], images[right_image_index], os.path.join(output_path, "left_right.jpg"))
+    montage_filelist = write_list(image_grid, output_path, 
+        "montage_{}x{}.txt".format(width, height), quote=True)
+    if not no_imagemagick:
+        command = "montage @{} -geometry +0+0 -tile {}x{} {}".format(
+            montage_filelist, width, height, os.path.join(output_path, grid_file))
         os.system(command)
+
+        if left_image_index is not None:
+            command = "montage '{}' '{}' -geometry +0+0 -tile 2x1 {}".format(
+                images[left_image_index], images[right_image_index], os.path.join(output_path, "left_right.jpg"))
+            os.system(command)
+    else:
+        print("Not implemented")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Deep learning grid layout")
@@ -378,14 +408,14 @@ def main():
                         help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
                          help='path to where to put output files')
+    parser.add_argument('--grid-file', default="grid.jpg",
+                         help='name (and format) of grid output file')
     parser.add_argument('--num-dimensions', default=2, type=int,
                         help='dimensionality of t-SNE points')
     parser.add_argument('--perplexity', default=30, type=int,
                         help='perplexity of t-SNE')
     parser.add_argument('--learning-rate', default=150, type=int,
                         help='learning rate of t-SNE')
-    parser.add_argument('--do-colors', default=False, action='store_true',
-                        help="Use average color as feature")
     parser.add_argument('--do-crop', default=False, action='store_true',
                         help="Center crop instead of scale")
     parser.add_argument('--tile', default=None,
@@ -399,7 +429,7 @@ def main():
     run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.model, args.layer, args.do_colors, args.do_crop)
+             args.model, args.layer, args.do_crop, args.grid_file)
 
 if __name__ == '__main__':
     main()
