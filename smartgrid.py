@@ -92,10 +92,14 @@ def get_average_color(path, colorspace='rgb'):
         c = [c, c, c]
     return c
 
-def get_image_list(input_glob, width, height, aspect_ratio):
+def get_image_list(input_glob):
     images = real_glob(input_glob)
     num_images = len(images)
     print("Found {} images".format(num_images))
+    return images
+
+def set_grid_size(images, width, height, aspect_ratio):
+    num_images = len(images)
     if width is None and aspect_ratio is None:
         # just have width == height
         biggest_square = int(math.sqrt(num_images))
@@ -111,14 +115,17 @@ def get_image_list(input_glob, width, height, aspect_ratio):
         print("tile size is {}x{} so aspect of {:.3f} is {}x{} (final: {}x{})".format(
             im_width, im_height, aspect_ratio, width, height, width*im_width, height*im_height))
 
-    max_images = width * height
-    images = images[:max_images]
-    num_images = len(images)
-    if num_images == 0:
+    num_grid_images = width * height
+    if num_grid_images > num_images:
+        print("Error: {} images is not enough for {}x{} grid.".format(num_images, width, height))
+        sys.exit(0)
+    elif num_grid_images == 0:
         print("Error: no images in {}".format(input_glob))
         sys.exit(0)
+
+    grid_images = images[:num_grid_images]
     print("Using {} images to build {}x{} montage".format(num_images, width, height))
-    return images, num_images, width, height
+    return grid_images, width, height
 
 def normalize_columns(rawpoints, low=0, high=1):
     mins = np.min(rawpoints, axis=0)
@@ -141,10 +148,10 @@ def analyze_images_colors(images, colorspace='rgb'):
     # colors = normalize_columns(colors)
     return colors
 
-def analyze_images(images, model, layer_name=None, do_crop=False):
-    if model == 'color_lab':
+def analyze_images(images, model_name, layer_name=None, do_crop=False):
+    if model_name == 'color_lab':
         return analyze_images_colors(images, colorspace='lab')
-    elif model == 'color' or model == 'color_rgb':
+    elif model_name == 'color' or model_name == 'color_rgb':
         return analyze_images_colors(images, colorspace='rgb')
 
     num_images = len(images)
@@ -153,24 +160,31 @@ def analyze_images(images, model, layer_name=None, do_crop=False):
     input_shape = (224, 224)
     include_top = (layer_name is not None)
     # make feature_extractor
-    if model == 'vgg16':
+    if model_name == 'vgg16':
         model = keras.applications.VGG16(weights='imagenet', include_top=include_top)
-    elif model == 'vgg19':
+    elif model_name == 'vgg19':
         model = keras.applications.VGG19(weights='imagenet', include_top=include_top)
-    elif model == 'resnet50':
+    elif model_name == 'resnet50':
         model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
-    elif model == 'inceptionv3':
+    elif model_name == 'inceptionv3':
         # todo: add support for different "pooling" options
         model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top)
-    elif model == 'xception':
+    elif model_name == 'xception':
         model = keras.applications.Xception(weights='imagenet', include_top=include_top)
+    else:
+        print("Error: model {} not found".format(model_name))
+        sys.exit(1)
 
-    if model == 'inceptionv3' or model == 'xception':
+    if model_name == 'inceptionv3' or model_name == 'xception':
         preprocess_input = keras.applications.inception_v3.preprocess_input
         input_shape = (299, 299)
 
     if layer_name is None:
         feat_extractor = model
+    elif layer_name == "show":
+        for i,layer in enumerate(model.layers):
+            print("{} layer {:03d}: {}".format(model_name, i, layer.name))
+        sys.exit(0)
     else:
         feat_extractor = Model(inputs=model.input, outputs=model.get_layer(layer_name).output)
 
@@ -186,8 +200,8 @@ def analyze_images(images, model, layer_name=None, do_crop=False):
             acts = feat_extractor.predict(img)[0]
             activations.append(acts.flatten())
     # run PCA firt
-    print("Running PCA on %d images..." % len(activations))
     features = np.array(activations)
+    print("Running PCA on features: {}".format(features.shape))
     pca = PCA(n_components=300)
     pca.fit(features)
     pca_features = pca.transform(features)
@@ -233,7 +247,7 @@ def write_list(list, output_path, output_file, quote=False):
                 text_file.write("{}\n".format(item))
     return filelist
 
-def make_grid_image(filelist, rows, cols, spacing, links=None):
+def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
     """Convert an image grid to a single image"""
     N = len(filelist)
 
@@ -241,9 +255,17 @@ def make_grid_image(filelist, rows, cols, spacing, links=None):
         width = img.size[0]
         height = img.size[1]
         if width > height:
-            max_link_size = int(0.5 * height)
+            max_link_size = int(1.0 * height)
         else:
-            max_link_size = int(0.5 * width)
+            max_link_size = int(1.0 * width)
+
+    if rows == None:
+        sq_num = math.sqrt(N)
+        sq_dim = int(sq_num)
+        if sq_num != sq_dim:
+            sq_dim = sq_dim + 1
+        rows = sq_dim
+        cols = sq_dim
 
     total_height = rows * height
     total_width  = cols * width
@@ -286,14 +308,48 @@ def make_grid_image(filelist, rows, cols, spacing, links=None):
 
     return Image.fromarray(im_array)
 
-def run_tsne(input_glob, left_image, right_image, left_right_scale,
+def filter_distance(images, X, min_distance, reject_dir=None):
+    num_images = len(images)
+    keepers = [True] * num_images
+    cur_pos = 0
+    assignments = []
+    for i in range(num_images):
+        if not keepers[i]:
+            continue
+        rejects = []
+        assignments.append(i)
+        cur_v = X[i]
+        for j in range(i+1, num_images):
+            if keepers[j]:
+                if np.linalg.norm(cur_v - X[j]) < min_distance:
+                    rejects.append(j)
+                    keepers[j] = False
+        if len(rejects) > 0:
+            print("rejecting {} images similar to entry {}".format(len(rejects), i))
+            if reject_dir:
+                reject_grid = [images[i]]
+                for ix in rejects:
+                    reject_grid.append(images[ix])
+                img = make_grid_image(reject_grid)
+                reject_file_path = os.path.join(reject_dir, "reject_{:03d}.jpg".format(i))
+                img.save(reject_file_path)
+
+
+    print("Keeping {} of {} images".format(len(assignments), num_images))
+    im_array = np.array(images)
+    X_array = np.array(X)
+    return im_array[assignments], X_array[assignments]
+
+def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
         model, layer, do_crop, grid_file, use_imagemagick,
-        grid_spacing, show_links):
+        grid_spacing, show_links, min_distance):
 
     ## compute width,weight from image list and provided defaults
-    images, num_images, width, height = get_image_list(input_glob, width, height, aspect_ratio)
+    if input_glob is not None:
+        images = get_image_list(input_glob)
+        num_images = len(images)
 
     ## Lookup left/right images
     left_image_index = None
@@ -303,7 +359,6 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         left_image_index = index_from_substring(images, left_image)
         right_image_index = index_from_substring(images, right_image)
 
-    num_images = width * height
     avg_colors = analyze_images_colors(images, 'rgb')
     X = analyze_images(images, model, layer, do_crop)
 
@@ -321,9 +376,20 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
             X_new[i] = new_length * norm_x
         X = X_new
 
-    X = np.asarray(X)
+    # TODO: filtering here
+    if min_distance is not None:
+        reject_dir = os.path.join(output_path, "rejects")
+        if reject_dir != '' and not os.path.exists(reject_dir):
+            os.makedirs(reject_dir)
+        images, X = filter_distance(images, X, min_distance, reject_dir)
+
+    grid_images, width, height = set_grid_size(images, width, height, aspect_ratio)
+    num_grid_images = len(grid_images)
+
+    # this line is a hack for now
+    X = np.asarray(X[:num_grid_images])
     print("SO X {}".format(X.shape))
-    print("Running t-SNE on {} images...".format(num_images))
+    print("Running t-SNE on {} images...".format(num_grid_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
 
     # make output directory if needed
@@ -334,9 +400,9 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     write_list(images, output_path, "image_files.txt")
     write_list(X, output_path, "image_vectors.txt")
     data = []
-    for i,f in enumerate(images):
+    for i,f in enumerate(grid_images):
         point = [ (tsne[i,k] - np.min(tsne[:,k]))/(np.max(tsne[:,k]) - np.min(tsne[:,k])) for k in range(tsne_dimensions) ]
-        data.append({"path":images[i], "point":point})
+        data.append({"path":grid_images[i], "point":point})
     with open(os.path.join(output_path, "points.json"), 'w') as outfile:
         json.dump(data, outfile)
 
@@ -430,7 +496,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
                 facecolors='none', edgecolors='g', marker='o', s=48)
     plt.savefig(os.path.join(output_path, 'movement.png'), bbox_inches='tight')
 
-    n_images = np.asarray(images)
+    n_images = np.asarray(grid_images)
     image_grid = n_images[row_assigns2]
     montage_filelist = write_list(image_grid, output_path, 
         "montage_{}x{}.txt".format(width, height), quote=True)
@@ -448,42 +514,43 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
         #         images[left_image_index], images[right_image_index], left_right_path)
         #     os.system(command)
 
-    # image vectors are in X
-    img_grid_vectors = X[row_assigns2]
-    links = None
-    if show_links:
-        links = []
-        for r in range(height):
-            row = []
-            links.append(row)
-            for c in range(width):
-                idx = r * width + c
-                cur_v = img_grid_vectors[idx]
-                if c < width - 1:
-                    left_v = img_grid_vectors[idx+1]
-                    dist_left = np.linalg.norm(cur_v - left_v)
-                else:
-                    dist_left = -1
-                if r < height - 1:
-                    down_v = img_grid_vectors[idx+width]
-                    dist_down = np.linalg.norm(cur_v - down_v)
-                else:
-                    dist_down = -1
-                cell = [dist_left, dist_down]
-                row.append(cell)
-        links = np.array(links)
-        # normalize to 0-1
-        links_max = np.amax(links)
-        valid_vals = np.where(links > 0)
-        links_min = np.amin(links[valid_vals])
-        print("Normalizing to {}/{}".format(links_min, links_max))
-        links = ((links - links_min) / (links_max - links_min))
-        print("Links is {}".format(links.shape))
-    img = make_grid_image(image_grid, width, height, grid_spacing, links)
-    img.save(grid_file_path)
-    if left_image_index is not None:
-        img = make_grid_image([images[left_image_index], images[right_image_index]], 2, 1, 1)
-        img.save(left_right_path)
+    else:
+        # image vectors are in X
+        img_grid_vectors = X[row_assigns2]
+        links = None
+        if show_links:
+            links = []
+            for r in range(height):
+                row = []
+                links.append(row)
+                for c in range(width):
+                    idx = r * width + c
+                    cur_v = img_grid_vectors[idx]
+                    if c < width - 1:
+                        left_v = img_grid_vectors[idx+1]
+                        dist_left = np.linalg.norm(cur_v - left_v)
+                    else:
+                        dist_left = -1
+                    if r < height - 1:
+                        down_v = img_grid_vectors[idx+width]
+                        dist_down = np.linalg.norm(cur_v - down_v)
+                    else:
+                        dist_down = -1
+                    cell = [dist_left, dist_down]
+                    row.append(cell)
+            links = np.array(links)
+            # normalize to 0-1
+            links_max = np.amax(links)
+            valid_vals = np.where(links > 0)
+            links_min = np.amin(links[valid_vals])
+            print("Normalizing to {}/{}".format(links_min, links_max))
+            links = ((links - links_min) / (links_max - links_min))
+            print("Links is {}".format(links.shape))
+        img = make_grid_image(image_grid, width, height, grid_spacing, links)
+        img.save(grid_file_path)
+        if left_image_index is not None:
+            img = make_grid_image([grid_images[left_image_index], grid_images[right_image_index]], 2, 1, 1)
+            img.save(left_right_path)
 
 
 def main():
@@ -522,15 +589,18 @@ def main():
                         help="visualize link strength in whitespace")
     parser.add_argument('--aspect-ratio', default=None, type=float,
                         help="Instead of square, fit image to given aspect ratio")
+    parser.add_argument('--min-distance', default=None, type=float,
+                        help="Removed duplicates based on distance")
     args = parser.parse_args()
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
-    run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
+    # this obviously needs refactoring
+    run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
              args.model, args.layer, args.do_crop, args.grid_file, args.use_imagemagick,
-             args.grid_spacing, args.show_links)
+             args.grid_spacing, args.show_links, args.min_distance)
 
 if __name__ == '__main__':
     main()
