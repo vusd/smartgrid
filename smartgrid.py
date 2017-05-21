@@ -233,12 +233,64 @@ def write_list(list, output_path, output_file, quote=False):
                 text_file.write("{}\n".format(item))
     return filelist
 
-# def process_image_list(input_glob)
+def make_grid_image(filelist, rows, cols, spacing, links=None):
+    """Convert an image grid to a single image"""
+    N = len(filelist)
+
+    with Image.open(filelist[0]) as img:
+        width = img.size[0]
+        height = img.size[1]
+        if width > height:
+            max_link_size = int(0.5 * height)
+        else:
+            max_link_size = int(0.5 * width)
+
+    total_height = rows * height
+    total_width  = cols * width
+
+    total_height = total_height + spacing * (rows - 1)
+    total_width  = total_width + spacing * (cols - 1)
+
+    im_array = np.zeros([total_height, total_width, 3]).astype(np.uint8)
+    im_array.fill(255)
+
+    if links is not None:
+        print("Rows: {}".format(len(links)))
+        for r in range(len(links)):
+            row = links[r]
+            for c in range(len(row)):
+                cell = row[c]
+                offset_y, offset_x = r*height+spacing*r, c*width+spacing*c
+                cy = int(offset_y + height / 2)
+                cx = int(offset_x + width / 2)
+                if cell[0] > 0:
+                    link_right_height = max_link_size * cell[0]
+                    oy = int(link_right_height / 2)
+                    ldw = int(link_right_height)
+                    im_array[(cy-oy):(cy-oy+ldw), cx:(cx+width), :] = 0
+                if cell[1] > 0:
+                    link_down_width = max_link_size * cell[1]
+                    ox = int(link_down_width / 2)
+                    lrw = int(link_down_width)
+                    im_array[cy:(cy+height), (cx-ox):(cx-ox+lrw), :] = 0
+
+    for i in range(rows*cols):
+        if i < N:
+            r = i // cols
+            c = i % cols
+
+            with Image.open(filelist[i]) as img:
+                rgb_im = img.convert('RGB')
+                offset_y, offset_x = r*height+spacing*r, c*width+spacing*c
+                im_array[offset_y:(offset_y+height), offset_x:(offset_x+width), :] = rgb_im
+
+    return Image.fromarray(im_array)
 
 def run_tsne(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
-        model, layer, do_crop, grid_file, no_imagemagick=False):
+        model, layer, do_crop, grid_file, use_imagemagick,
+        grid_spacing, show_links):
 
     ## compute width,weight from image list and provided defaults
     images, num_images, width, height = get_image_list(input_glob, width, height, aspect_ratio)
@@ -269,6 +321,8 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
             X_new[i] = new_length * norm_x
         X = X_new
 
+    X = np.asarray(X)
+    print("SO X {}".format(X.shape))
     print("Running t-SNE on {} images...".format(num_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
 
@@ -349,7 +403,7 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     # print(grid.shape)
     # print(data2d.shape)
 
-    cost = distance.cdist(grid, data2d, 'cosine')
+    cost = distance.cdist(grid, data2d, 'euclidean')
     # cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
 
@@ -380,17 +434,56 @@ def run_tsne(input_glob, left_image, right_image, left_right_scale,
     image_grid = n_images[row_assigns2]
     montage_filelist = write_list(image_grid, output_path, 
         "montage_{}x{}.txt".format(width, height), quote=True)
-    if not no_imagemagick:
+    grid_file_path = os.path.join(output_path, grid_file)
+    grid_im_file_path = os.path.join(output_path, "im_{}".format(grid_file))
+    left_right_path = os.path.join(output_path, "left_right.jpg")
+    if use_imagemagick:
         command = "montage @{} -geometry +0+0 -tile {}x{} {}".format(
-            montage_filelist, width, height, os.path.join(output_path, grid_file))
+            montage_filelist, width, height, grid_im_file_path)
+        # print("running imagemagick montage: {}".format(command))
         os.system(command)
 
-        if left_image_index is not None:
-            command = "montage '{}' '{}' -geometry +0+0 -tile 2x1 {}".format(
-                images[left_image_index], images[right_image_index], os.path.join(output_path, "left_right.jpg"))
-            os.system(command)
-    else:
-        print("Not implemented")
+        # if left_image_index is not None:
+        #     command = "montage '{}' '{}' -geometry +0+0 -tile 2x1 {}".format(
+        #         images[left_image_index], images[right_image_index], left_right_path)
+        #     os.system(command)
+
+    # image vectors are in X
+    img_grid_vectors = X[row_assigns2]
+    links = None
+    if show_links:
+        links = []
+        for r in range(height):
+            row = []
+            links.append(row)
+            for c in range(width):
+                idx = r * width + c
+                cur_v = img_grid_vectors[idx]
+                if c < width - 1:
+                    left_v = img_grid_vectors[idx+1]
+                    dist_left = np.linalg.norm(cur_v - left_v)
+                else:
+                    dist_left = -1
+                if r < height - 1:
+                    down_v = img_grid_vectors[idx+width]
+                    dist_down = np.linalg.norm(cur_v - down_v)
+                else:
+                    dist_down = -1
+                cell = [dist_left, dist_down]
+                row.append(cell)
+        links = np.array(links)
+        # normalize to 0-1
+        links_max = np.amax(links)
+        valid_vals = np.where(links > 0)
+        links_min = np.amin(links[valid_vals])
+        print("Normalizing to {}/{}".format(links_min, links_max))
+        links = ((links - links_min) / (links_max - links_min))
+        print("Links is {}".format(links.shape))
+    img = make_grid_image(image_grid, width, height, grid_spacing, links)
+    img.save(grid_file_path)
+    if left_image_index is not None:
+        img = make_grid_image([images[left_image_index], images[right_image_index]], 2, 1, 1)
+        img.save(left_right_path)
 
 
 def main():
@@ -419,8 +512,14 @@ def main():
                         help='learning rate of t-SNE')
     parser.add_argument('--do-crop', default=False, action='store_true',
                         help="Center crop instead of scale")
+    parser.add_argument('--use-imagemagick', default=False, action='store_true',
+                        help="generate grid using imagemagick (montage)")
     parser.add_argument('--tile', default=None,
                         help="Grid size WxH (eg: 12x12)")
+    parser.add_argument('--grid-spacing', default=0, type=int,
+                        help='whitespace between images in grid')
+    parser.add_argument('--show-links', default=False, action='store_true',
+                        help="visualize link strength in whitespace")
     parser.add_argument('--aspect-ratio', default=None, type=float,
                         help="Instead of square, fit image to given aspect ratio")
     args = parser.parse_args()
@@ -430,7 +529,8 @@ def main():
     run_tsne(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.model, args.layer, args.do_crop, args.grid_file)
+             args.model, args.layer, args.do_crop, args.grid_file, args.use_imagemagick,
+             args.grid_spacing, args.show_links)
 
 if __name__ == '__main__':
     main()
