@@ -247,6 +247,21 @@ def write_list(list, output_path, output_file, quote=False):
                 text_file.write("{}\n".format(item))
     return filelist
 
+def read_list(output_path, output_file, numeric=False):
+    filelist = os.path.join(output_path, output_file)
+    lines = []
+    with open(filelist) as file:
+        for line in file:
+            line = line.strip() #or someother preprocessing
+            if numeric:
+                lines.append(list(map(float, line.split(","))))
+            else:
+                lines.append(line)
+    if numeric:
+        return np.array(lines)
+    else:
+        return lines
+
 def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
     """Convert an image grid to a single image"""
     N = len(filelist)
@@ -344,12 +359,32 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
         model, layer, do_crop, grid_file, use_imagemagick,
-        grid_spacing, show_links, min_distance):
+        grid_spacing, show_links, min_distance, do_reload=False):
 
-    ## compute width,weight from image list and provided defaults
-    if input_glob is not None:
-        images = get_image_list(input_glob)
+
+    # make output directory if needed
+    if output_path != '' and not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    if do_reload:
+        images = read_list(output_path, "image_files.txt", numeric=False)
+        X = read_list(output_path, "image_vectors.txt", numeric=True)
+        print("Reloaded {} images and {} vectors".format(len(images), X.shape))
         num_images = len(images)
+        avg_colors = analyze_images_colors(images, 'rgb')
+    else:
+        ## compute width,weight from image list and provided defaults
+        if input_glob is not None:
+            images = get_image_list(input_glob)
+            num_images = len(images)
+
+        X = analyze_images(images, model, layer, do_crop)
+
+        # save data
+        write_list(images, output_path, "image_files.txt")
+        write_list(X, output_path, "image_vectors.txt")
+
+    avg_colors = analyze_images_colors(images, 'rgb')
 
     ## Lookup left/right images
     left_image_index = None
@@ -358,9 +393,6 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     if left_image is not None and right_image is not None:
         left_image_index = index_from_substring(images, left_image)
         right_image_index = index_from_substring(images, right_image)
-
-    avg_colors = analyze_images_colors(images, 'rgb')
-    X = analyze_images(images, model, layer, do_crop)
 
     if left_image_index is not None:
         # todo: confirm this is how to stretch by a vector
@@ -388,17 +420,12 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     # this line is a hack for now
     X = np.asarray(X[:num_grid_images])
+
     print("SO X {}".format(X.shape))
     print("Running t-SNE on {} images...".format(num_grid_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
 
-    # make output directory if needed
-    if output_path != '' and not os.path.exists(output_path):
-        os.makedirs(output_path)
 
-    # save data
-    write_list(images, output_path, "image_files.txt")
-    write_list(X, output_path, "image_vectors.txt")
     data = []
     for i,f in enumerate(grid_images):
         point = [ (tsne[i,k] - np.min(tsne[:,k]))/(np.max(tsne[:,k]) - np.min(tsne[:,k])) for k in range(tsne_dimensions) ]
@@ -501,7 +528,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     montage_filelist = write_list(image_grid, output_path, 
         "montage_{}x{}.txt".format(width, height), quote=True)
     grid_file_path = os.path.join(output_path, grid_file)
-    grid_im_file_path = os.path.join(output_path, "im_{}".format(grid_file))
+    grid_im_file_path = os.path.join(output_path, "{}".format(grid_file))
     left_right_path = os.path.join(output_path, "left_right.jpg")
     if use_imagemagick:
         command = "montage @{} -geometry +0+0 -tile {}x{} {}".format(
@@ -591,6 +618,8 @@ def main():
                         help="Instead of square, fit image to given aspect ratio")
     parser.add_argument('--min-distance', default=None, type=float,
                         help="Removed duplicates based on distance")
+    parser.add_argument('--do-reload', default=False, action='store_true',
+                        help="Reload file list and vectors from saved state")
     args = parser.parse_args()
     width, height = None, None
     if args.tile is not None:
@@ -600,7 +629,7 @@ def main():
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
              args.model, args.layer, args.do_crop, args.grid_file, args.use_imagemagick,
-             args.grid_spacing, args.show_links, args.min_distance)
+             args.grid_spacing, args.show_links, args.min_distance, args.do_reload)
 
 if __name__ == '__main__':
     main()
