@@ -148,7 +148,7 @@ def analyze_images_colors(images, colorspace='rgb'):
     # colors = normalize_columns(colors)
     return colors
 
-def analyze_images(images, model_name, layer_name=None, do_crop=False):
+def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False):
     if model_name == 'color_lab':
         return analyze_images_colors(images, colorspace='lab')
     elif model_name == 'color' or model_name == 'color_rgb':
@@ -167,8 +167,7 @@ def analyze_images(images, model_name, layer_name=None, do_crop=False):
     elif model_name == 'resnet50':
         model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
     elif model_name == 'inceptionv3':
-        # todo: add support for different "pooling" options
-        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top)
+        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top, pooling=pooling)
     elif model_name == 'xception':
         model = keras.applications.Xception(weights='imagenet', include_top=include_top)
     else:
@@ -358,7 +357,7 @@ def filter_distance(images, X, min_distance, reject_dir=None):
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
-        model, layer, do_crop, grid_file, use_imagemagick,
+        model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, min_distance, do_reload=False):
 
 
@@ -378,7 +377,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             images = get_image_list(input_glob)
             num_images = len(images)
 
-        X = analyze_images(images, model, layer, do_crop)
+        X = analyze_images(images, model, layer, pooling, do_crop)
 
         # save data
         write_list(images, output_path, "image_files.txt")
@@ -592,6 +591,8 @@ def main():
                         help="model to use, one of: vgg16 vgg19 resnet50 inceptionv3 xception")
     parser.add_argument('--layer', default=None,
                         help="optional override to set custom model layer")
+    parser.add_argument('--pooling', default=None,
+                        help="optional override to control inceptionv3 pooling (avg or max)")
     parser.add_argument('--left-right-scale', default=4.0, type=float,
                         help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
@@ -628,7 +629,7 @@ def main():
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.model, args.layer, args.do_crop, args.grid_file, args.use_imagemagick,
+             args.model, args.layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.min_distance, args.do_reload)
 
 if __name__ == '__main__':
