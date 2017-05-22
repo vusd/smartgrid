@@ -322,7 +322,7 @@ def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
 
     return Image.fromarray(im_array)
 
-def filter_distance(images, X, min_distance, reject_dir=None):
+def filter_distance_min(images, X, min_distance, reject_dir=None):
     num_images = len(images)
     keepers = [True] * num_images
     cur_pos = 0
@@ -345,7 +345,44 @@ def filter_distance(images, X, min_distance, reject_dir=None):
                 for ix in rejects:
                     reject_grid.append(images[ix])
                 img = make_grid_image(reject_grid)
-                reject_file_path = os.path.join(reject_dir, "reject_{:03d}.jpg".format(i))
+                reject_file_path = os.path.join(reject_dir,
+                    "dist_{:04f}_{:03d}.jpg".format(min_distance, i))
+                img.save(reject_file_path)
+
+
+    print("Keeping {} of {} images".format(len(assignments), num_images))
+    im_array = np.array(images)
+    X_array = np.array(X)
+    return im_array[assignments], X_array[assignments]
+
+def filter_distance_max(images, X, max_distance, reject_dir=None):
+    num_images = len(images)
+    keepers = [False] * num_images
+    cur_pos = 0
+    assignments = []
+    for i in range(num_images):
+        if keepers[i]:
+            assignments.append(i)
+            continue
+        accepts = []
+        cur_v = X[i]
+        for j in range(i+1, num_images):
+            if not keepers[j]:
+                if np.linalg.norm(cur_v - X[j]) < max_distance:
+                    keepers[i] = True
+                    keepers[j] = True
+                    accepts.append(j)
+
+        if len(accepts) > 0:
+            print("accepting {} images similar to entry {}".format(len(accepts), i))
+            assignments.append(i)
+            if reject_dir:
+                reject_grid = [images[i]]
+                for ix in accepts:
+                    reject_grid.append(images[ix])
+                img = make_grid_image(reject_grid)
+                reject_file_path = os.path.join(reject_dir, 
+                    "dist_{:04f}_{:03d}.jpg".format(max_distance, i))
                 img.save(reject_file_path)
 
 
@@ -358,7 +395,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
-        grid_spacing, show_links, min_distance, do_reload=False):
+        grid_spacing, show_links, min_distance, max_distance, do_reload=False):
 
 
     # make output directory if needed
@@ -409,10 +446,16 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     # TODO: filtering here
     if min_distance is not None:
-        reject_dir = os.path.join(output_path, "rejects")
+        reject_dir = os.path.join(output_path, "rejects_min")
         if reject_dir != '' and not os.path.exists(reject_dir):
             os.makedirs(reject_dir)
-        images, X = filter_distance(images, X, min_distance, reject_dir)
+        images, X = filter_distance_min(images, X, min_distance, reject_dir)
+
+    if max_distance is not None:
+        reject_dir = os.path.join(output_path, "rejects_max")
+        if reject_dir != '' and not os.path.exists(reject_dir):
+            os.makedirs(reject_dir)
+        images, X = filter_distance_max(images, X, max_distance, reject_dir)
 
     grid_images, width, height = set_grid_size(images, width, height, aspect_ratio)
     num_grid_images = len(grid_images)
@@ -619,6 +662,8 @@ def main():
                         help="Instead of square, fit image to given aspect ratio")
     parser.add_argument('--min-distance', default=None, type=float,
                         help="Removed duplicates based on distance")
+    parser.add_argument('--max-distance', default=None, type=float,
+                        help="Removes items if they are beyond max from all others")
     parser.add_argument('--do-reload', default=False, action='store_true',
                         help="Reload file list and vectors from saved state")
     args = parser.parse_args()
@@ -630,7 +675,8 @@ def main():
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
              args.model, args.layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
-             args.grid_spacing, args.show_links, args.min_distance, args.do_reload)
+             args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
+             args.do_reload)
 
 if __name__ == '__main__':
     main()
