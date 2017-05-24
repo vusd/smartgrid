@@ -636,7 +636,7 @@ def main():
                         help="use file as example of left")
     parser.add_argument('--right-image', default=None,
                         help="use file as example of right")
-    parser.add_argument('--model', default='vgg16',
+    parser.add_argument('--model', default=None,
                         help="model to use, one of: vgg16 vgg19 resnet50 inceptionv3 xception")
     parser.add_argument('--layer', default=None,
                         help="optional override to set custom model layer")
@@ -676,11 +676,20 @@ def main():
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
+    if args.model is None and args.layer is None:
+        model = "vgg16"
+        layer = "fc2"
+    elif args.model is None:
+        model = "vgg16"
+        layer = args.layer
+    else:
+        model = args.model
+        layer = args.layer
     # this obviously needs refactoring
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.model, args.layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
+             model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
              args.do_reload)
 
