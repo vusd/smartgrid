@@ -32,9 +32,13 @@ try:
     # https://github.com/src-d/lapjv
     import lapjv
 except ImportError:
-    # https://github.com/dribnet/lapjv1
-    using_lapjv1 = True
-    import lapjv1
+    try:
+        # https://github.com/dribnet/lapjv1
+        using_lapjv1 = True
+        import lapjv1
+    except ImportError:
+        print("Error: could not find lapjv or lapjv1, cannot continue")
+        sys.exit(1)
 
 def real_glob(rglob):
     glob_list = braceexpand(rglob)
@@ -543,7 +547,9 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     cost = cost * (100000. / cost.max())
 
     if using_lapjv1:
+        print("Starting assignment (this can take a few minutes)")
         min_cost2, row_assigns2, col_assigns2 = lapjv1.lapjv1(cost)
+        print("Assignment complete")
     else:
         # note slightly different API
         row_assigns2, col_assigns2, min_cost2 = lapjv.lapjv(cost, verbose=True, force_doubles=False)
