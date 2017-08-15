@@ -102,32 +102,68 @@ def get_image_list(input_glob):
     print("Found {} images".format(num_images))
     return images
 
-def set_grid_size(images, width, height, aspect_ratio):
+def set_grid_size(images, width, height, aspect_ratio, drop_to_fit):
     num_images = len(images)
     if width is None and aspect_ratio is None:
         # just have width == height
-        biggest_square = int(math.sqrt(num_images))
-        width, height = biggest_square, biggest_square
+        max_side_extent = math.sqrt(num_images)
+        if max_side_extent.is_integer() or drop_to_fit:
+            width = int(max_side_extent)
+            height = width
+        else:
+            width = int(max_side_extent) + 1
+            print("Checking: ", width*(width-1), num_images)
+            if width*(width-1) >= num_images:
+                height = width-1
+            else:
+                height = width
     elif width is None:
         # sniff the aspect ratio of the first file
         with Image.open(images[0]) as img:
             im_width = img.size[0]
             im_height = img.size[1]
             tile_aspect_ratio =  im_width / im_height
-        height = int(math.sqrt((num_images * tile_aspect_ratio) / aspect_ratio))
-        width = int(num_images / height)
+        raw_height = math.sqrt((num_images * tile_aspect_ratio) / aspect_ratio)
+        raw_width = num_images / raw_height
+        int_height = int(raw_height)
+        int_width = int(raw_width)
+        if (raw_height.is_integer() and raw_width.is_integer()) or drop_to_fit:
+            height = int_height
+            width = int_width
+            if not drop_to_fit:
+                print("--> {} images fits exactly as {}x{}".format(num_images, width, height))
+        else:
+            if not raw_height.is_integer():
+                int_height = int_height + 1
+            if not raw_width.is_integer():
+                int_width = int_width + 1
+            if int_width*(int_height-1) >= num_images:
+                width = int_width
+                height = int_height-1
+            else:
+                width = int_width
+                height = int_height
+            print("--> {} images best fits as {}x{}".format(num_images, width, height))
         print("tile size is {}x{} so aspect of {:.3f} is {}x{} (final: {}x{})".format(
             im_width, im_height, aspect_ratio, width, height, width*im_width, height*im_height))
 
-    num_grid_images = width * height
-    if num_grid_images > num_images:
-        print("Error: {} images is not enough for {}x{} grid.".format(num_images, width, height))
+    num_grid_spaces = width * height
+    if drop_to_fit:
+        grid_images = images[:num_grid_spaces]
+        num_images = len(grid_images)
+    else:
+        grid_images = images
+
+    if num_grid_spaces < num_images:
+        print("Error: {} images is too many for {}x{} grid.".format(num_images, width, height))
         sys.exit(0)
-    elif num_grid_images == 0:
+    elif num_images == 0:
         print("Error: no images in {}".format(input_glob))
         sys.exit(0)
+    elif num_grid_spaces == 0:
+        print("Error: no spaces for images")
+        sys.exit(0)
 
-    grid_images = images[:num_grid_images]
     print("Using {} images to build {}x{} montage".format(num_images, width, height))
     return grid_images, width, height
 
@@ -395,12 +431,20 @@ def filter_distance_max(images, X, max_distance, reject_dir=None):
     X_array = np.array(X)
     return im_array[assignments], X_array[assignments]
 
+def reduce_grid_targets(grid, num_grid_images):
+    print("reducing grid from {} to {}".format(len(grid), num_grid_images))
+    mean_point = np.mean(grid, axis=0)
+    newList = grid - mean_point
+    sort = np.sum(np.power(newList, 2), axis=1)
+    indexed_order = sort.argsort()
+    sorted_list = grid[indexed_order]
+    return sorted_list[:num_grid_images], indexed_order
+
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
-        tsne_learning_rate, width, height, aspect_ratio,
+        tsne_learning_rate, width, height, aspect_ratio, drop_to_fit, fill_shade,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, min_distance, max_distance, do_reload=False):
-
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -461,8 +505,9 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             os.makedirs(reject_dir)
         images, X = filter_distance_max(images, X, max_distance, reject_dir)
 
-    grid_images, width, height = set_grid_size(images, width, height, aspect_ratio)
+    grid_images, width, height = set_grid_size(images, width, height, aspect_ratio, drop_to_fit)
     num_grid_images = len(grid_images)
+    print("Compare: {} and {}".format(num_grid_images, width*height))
 
     # this line is a hack for now
     X = np.asarray(X[:num_grid_images])
@@ -470,7 +515,6 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     print("SO X {}".format(X.shape))
     print("Running t-SNE on {} images...".format(num_grid_images))
     tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
-
 
     data = []
     for i,f in enumerate(grid_images):
@@ -539,13 +583,14 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         max_width = width / height
     xv, yv = np.meshgrid(np.linspace(0, max_width, width), np.linspace(0, max_height, height))
     grid = np.dstack((xv, yv)).reshape(-1, 2)
-    # print(grid.shape)
-    # print(data2d.shape)
+    grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images)
+    print("G", grid.shape)
+    print("D2D", data2d.shape)
 
     cost = distance.cdist(grid, data2d, 'euclidean')
     # cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
-    print(cost.shape)
+    print("C", cost.shape, cost[0][0])
 
     if using_python_lap:
         print("Starting assignment (this can take a few minutes)")
@@ -572,8 +617,34 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
                 facecolors='none', edgecolors='g', marker='o', s=48)
     plt.savefig(os.path.join(output_path, 'movement.png'), bbox_inches='tight')
 
+
+    num_grid_spaces = len(indexed_lookup)
+    num_actual_images = len(row_assigns2)
+    num_missing = num_grid_spaces - num_actual_images
+
+    if num_missing > 0:
+        # sniff the aspect ratio of the first file
+        with Image.open(grid_images[0]) as img:
+            im_width = img.size[0]
+            im_height = img.size[1]
+
+        im_array = np.full([im_width, im_height, 3], [fill_shade, fill_shade, fill_shade]).astype(np.uint8)
+        # im_array = np.zeros([im_width, im_height, 3]).astype(np.uint8)
+        blank_img = Image.fromarray(im_array)
+        blank_image_path = os.path.join(output_path, "blank.png")
+        blank_img.save(blank_image_path)
+        blank_index = len(grid_images)
+        grid_images.append(blank_image_path)
+        residuals = np.full([num_missing], blank_index)
+        row_assigns2 = np.append(row_assigns2, residuals)
+
+    reverse_lookup = np.zeros(num_grid_spaces, dtype=int)
+    reverse_lookup[indexed_lookup] = np.arange(num_grid_spaces)
+
+    image_indexes = row_assigns2[reverse_lookup]
+
     n_images = np.asarray(grid_images)
-    image_grid = n_images[row_assigns2]
+    image_grid = n_images[image_indexes]
     montage_filelist = write_list(image_grid, output_path, 
         "montage_{}x{}.txt".format(width, height), quote=True)
     grid_file_path = os.path.join(output_path, grid_file)
@@ -592,10 +663,10 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     else:
         # image vectors are in X
-        img_grid_vectors = X[row_assigns2]
         links = None
         if show_links:
             links = []
+            img_grid_vectors = X[row_assigns2]
             for r in range(height):
                 row = []
                 links.append(row)
@@ -657,6 +728,10 @@ def main():
                         help='learning rate of t-SNE')
     parser.add_argument('--do-crop', default=False, action='store_true',
                         help="Center crop instead of scale")
+    parser.add_argument('--drop-to-fit', default=False, action='store_true',
+                        help="Drop extra images to fit to aspect ratio")
+    parser.add_argument('--fill-shade', default=255, type=int,
+                        help='shade of gray for filling in blanks')
     parser.add_argument('--use-imagemagick', default=False, action='store_true',
                         help="generate grid using imagemagick (montage)")
     parser.add_argument('--tile', default=None,
@@ -690,6 +765,7 @@ def main():
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
+             args.drop_to_fit, args.fill_shade,
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
              args.do_reload)
