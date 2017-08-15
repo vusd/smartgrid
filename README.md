@@ -134,7 +134,7 @@ Go get a coffee. Then come back to find `outputs/ny_color_lab/grid_scaled.jpg`:
 # dependencies
 
 Currently requires keras 2.x, scipy, sklearn, matplotlib,
-braceexpand, tqdm, and either [lapjv1](https://github.com/dribnet/lapjv1) (seems to work everywhere but sometimes hangs) or [lapjv](https://github.com/src-d/lapjv) (runs much faster for me and provides verbose output). Also requires imagemagick (montage) when using `--use-imagemagick` option.
+braceexpand, tqdm, and either [python-lap](https://github.com/dribnet/python-lap/tree/rename_lap) (seems to work everywhere but sometimes hangs when processing >600 images) or [lapjv](https://github.com/src-d/lapjv) (runs much faster for me and provides verbose output). Also requires imagemagick (montage) when using `--use-imagemagick` option.
 
 # credits
 

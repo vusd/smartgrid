@@ -27,17 +27,17 @@ from braceexpand import braceexpand
 import glob
 
 # import with fallback behavior
-using_lapjv1 = False
+using_python_lap = False
 try:
     # https://github.com/src-d/lapjv
     import lapjv
 except ImportError:
     try:
-        # https://github.com/dribnet/lapjv1
-        using_lapjv1 = True
-        import lapjv1
+        # https://github.com/dribnet/python-lap/tree/rename_lap
+        using_python_lap = True
+        import lap
     except ImportError:
-        print("Error: could not find lapjv or lapjv1, cannot continue")
+        print("Error: could not find lapjv or python-lap, cannot continue")
         sys.exit(1)
 
 def real_glob(rglob):
@@ -545,10 +545,11 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     cost = distance.cdist(grid, data2d, 'euclidean')
     # cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
+    print(cost.shape)
 
-    if using_lapjv1:
+    if using_python_lap:
         print("Starting assignment (this can take a few minutes)")
-        min_cost2, row_assigns2, col_assigns2 = lapjv1.lapjv1(cost)
+        min_cost2, row_assigns2, col_assigns2 = lap.lapjv(cost)
         print("Assignment complete")
     else:
         # note slightly different API
