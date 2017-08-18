@@ -96,8 +96,31 @@ def get_average_color(path, colorspace='rgb'):
         c = [c, c, c]
     return c
 
+def read_file_list(filelist):
+    lines = []
+    with open(filelist) as file:
+        for line in file:
+            line = line.strip() #or someother preprocessing
+            line = line.strip( '"' ) # remove quotes
+            lines.append(line)
+    return lines
+
+def read_json_vectors(filename):
+    """Return np array of vectors from json sources"""
+    vectors = []
+    with open(filename) as json_file:
+        json_data = json.load(json_file)
+    for v in json_data:
+        vectors.append(v)
+    print("Read {} vectors from {}".format(len(vectors), filename))
+    np_array = np.array(vectors)
+    return np_array
+
 def get_image_list(input_glob):
-    images = real_glob(input_glob)
+    if input_glob.startswith('@'):
+        images = read_file_list(input_glob[1:])
+    else:
+        images = real_glob(input_glob)
     num_images = len(images)
     print("Found {} images".format(num_images))
     return images
@@ -220,7 +243,7 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
 
     if layer_name is None:
         feat_extractor = model
-    elif layer_name == "show":
+    elif layer_name == "show" or layer_name == "list":
         for i,layer in enumerate(model.layers):
             print("{} layer {:03d}: {}".format(model_name, i, layer.name))
         sys.exit(0)
@@ -237,6 +260,8 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
             img = preprocess_input(img)
             # print("getting activations for %s %d/%d" % (file_path,idx,num_images))
             acts = feat_extractor.predict(img)[0]
+            if len(activations) == 0:
+                print("Collecting vectors of size {}".format(acts.flatten().shape))
             activations.append(acts.flatten())
     # run PCA firt
     features = np.array(activations)
@@ -367,6 +392,7 @@ def filter_distance_min(images, X, min_distance, reject_dir=None):
     keepers = [True] * num_images
     cur_pos = 0
     assignments = []
+    min_distance2 = min_distance * min_distance
     for i in range(num_images):
         if not keepers[i]:
             continue
@@ -375,7 +401,9 @@ def filter_distance_min(images, X, min_distance, reject_dir=None):
         cur_v = X[i]
         for j in range(i+1, num_images):
             if keepers[j]:
-                if np.linalg.norm(cur_v - X[j]) < min_distance:
+                # if np.linalg.norm(cur_v - X[j]) < min_distance:
+                diff = cur_v - X[j]
+                if np.dot(diff, diff) < min_distance2:
                     rejects.append(j)
                     keepers[j] = False
         if len(rejects) > 0:
@@ -393,13 +421,14 @@ def filter_distance_min(images, X, min_distance, reject_dir=None):
     print("Keeping {} of {} images".format(len(assignments), num_images))
     im_array = np.array(images)
     X_array = np.array(X)
-    return im_array[assignments], X_array[assignments]
+    return im_array[assignments].tolist(), X_array[assignments]
 
-def filter_distance_max(images, X, max_distance, reject_dir=None):
+def filter_distance_max(images, X, max_distance, reject_dir=None, max_group_size=1):
     num_images = len(images)
     keepers = [False] * num_images
     cur_pos = 0
     assignments = []
+    max_distance2 = max_distance * max_distance
     for i in range(num_images):
         if keepers[i]:
             assignments.append(i)
@@ -408,12 +437,14 @@ def filter_distance_max(images, X, max_distance, reject_dir=None):
         cur_v = X[i]
         for j in range(i+1, num_images):
             if not keepers[j]:
-                if np.linalg.norm(cur_v - X[j]) < max_distance:
+                # if np.linalg.norm(cur_v - X[j]) < max_distance:
+                diff = cur_v - X[j]
+                if np.dot(diff, diff) < max_distance2:
                     keepers[i] = True
                     keepers[j] = True
                     accepts.append(j)
 
-        if len(accepts) > 0:
+        if len(accepts) >= max_group_size:
             print("accepting {} images similar to entry {}".format(len(accepts), i))
             assignments.append(i)
             if reject_dir:
@@ -429,7 +460,7 @@ def filter_distance_max(images, X, max_distance, reject_dir=None):
     print("Keeping {} of {} images".format(len(assignments), num_images))
     im_array = np.array(images)
     X_array = np.array(X)
-    return im_array[assignments], X_array[assignments]
+    return im_array[assignments].tolist(), X_array[assignments]
 
 def reduce_grid_targets(grid, num_grid_images):
     print("reducing grid from {} to {}".format(len(grid), num_grid_images))
@@ -440,11 +471,22 @@ def reduce_grid_targets(grid, num_grid_images):
     sorted_list = grid[indexed_order]
     return sorted_list[:num_grid_images], indexed_order
 
+def run_prune(filelist, vectorlist):
+    new_filelist = []
+    new_vectorlist = []
+    for i in range(len(vectorlist)):
+        if vectorlist[i] is not None:
+            new_filelist.append(filelist[i])
+            new_vectorlist.append(vectorlist[i])
+    print("Pruned filelist from {} to {} entries".format(len(filelist), len(new_filelist)))
+    return new_filelist, np.array(new_vectorlist)
+
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio, drop_to_fit, fill_shade,
+        vectors_file, do_prune,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
-        grid_spacing, show_links, min_distance, max_distance, do_reload=False):
+        grid_spacing, show_links, min_distance, max_distance, max_group_size, do_reload=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -462,7 +504,13 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             images = get_image_list(input_glob)
             num_images = len(images)
 
-        X = analyze_images(images, model, layer, pooling, do_crop)
+        if vectors_file is not None:
+            X = read_json_vectors(vectors_file)
+        else:
+            X = analyze_images(images, model, layer, pooling, do_crop)
+
+        if do_prune:
+            images, X = run_prune(images, X)
 
         # save data
         write_list(images, output_path, "image_files.txt")
@@ -503,7 +551,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         reject_dir = os.path.join(output_path, "rejects_max")
         if reject_dir != '' and not os.path.exists(reject_dir):
             os.makedirs(reject_dir)
-        images, X = filter_distance_max(images, X, max_distance, reject_dir)
+        images, X = filter_distance_max(images, X, max_distance, reject_dir, max_group_size)
 
     grid_images, width, height = set_grid_size(images, width, height, aspect_ratio, drop_to_fit)
     num_grid_images = len(grid_images)
@@ -708,6 +756,10 @@ def main():
                         help="use file as example of left")
     parser.add_argument('--right-image', default=None,
                         help="use file as example of right")
+    parser.add_argument('--vectors', default=None,
+                        help="read vectors directly instead of running model")
+    parser.add_argument('--do-prune', default=False, action='store_true',
+                        help="Prune filelist filtering if vectors missing")
     parser.add_argument('--model', default=None,
                         help="model to use, one of: vgg16 vgg19 resnet50 inceptionv3 xception")
     parser.add_argument('--layer', default=None,
@@ -746,6 +798,8 @@ def main():
                         help="Removed duplicates based on distance")
     parser.add_argument('--max-distance', default=None, type=float,
                         help="Removes items if they are beyond max from all others")
+    parser.add_argument('--max-group-size', default=1, type=int,
+                        help='when max-distance, minimum number of additional members')
     parser.add_argument('--do-reload', default=False, action='store_true',
                         help="Reload file list and vectors from saved state")
     args = parser.parse_args()
@@ -765,10 +819,10 @@ def main():
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.drop_to_fit, args.fill_shade,
+             args.drop_to_fit, args.fill_shade, args.vectors, args.do_prune,
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
-             args.do_reload)
+             args.max_group_size, args.do_reload)
 
 if __name__ == '__main__':
     main()
