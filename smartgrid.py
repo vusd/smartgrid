@@ -79,7 +79,7 @@ def get_image(path, input_shape, do_crop=False):
     x = np.expand_dims(x, axis=0)
     return x
 
-def get_average_color(path, colorspace='rgb'):
+def get_average_color_classic(path, colorspace='rgb'):
     c = scipy.misc.imread(path, mode='RGB')
     if colorspace == 'lab':
         # print("CONVERTING TO LAB")
@@ -95,6 +95,42 @@ def get_average_color(path, colorspace='rgb'):
     if isinstance(c, numbers.Number):
         c = [c, c, c]
     return c
+
+def get_average_color(path, colorspace='rgb', subsampling=None):
+    im = scipy.misc.imread(path, mode='RGB')
+    w, h, c = im.shape
+    colors = []
+    if subsampling is None:
+        subsampling = "1";
+    if subsampling.endswith("+"):
+        sample_from = int(subsampling[:-1])
+        sample_downto = 0
+    else:
+        sample_from = int(subsampling)
+        sample_downto = sample_from-1
+    for gridsize in range(sample_from, sample_downto, -1):
+        for y in range(gridsize):
+            h1 = int(y*h/gridsize)
+            h2 = int((y+1)*h/gridsize)
+            for x in range(gridsize):
+                w1 = int(x*w/gridsize)
+                w2 = int((x+1)*w/gridsize)
+                quadrant = im[w1:w2, h1:h2, :]
+
+                if colorspace == 'lab':
+                    c = color.rgb2lab(quadrant)
+                    c = c.mean(axis=(0,1))
+                else:
+                    c = quadrant.mean(axis=(0,1))
+                    c = c / 255.0
+
+                # WTF indeed (this happens for black (rgb))
+                if isinstance(c, numbers.Number):
+                    c = [c, c, c]
+
+                colors.append(c)
+
+    return np.array(colors).flatten()
 
 def read_file_list(filelist):
     lines = []
@@ -197,12 +233,15 @@ def normalize_columns(rawpoints, low=0, high=1):
     scaled_points = high - (((high - low) * (maxs - rawpoints)) / rng)
     return scaled_points
 
-def analyze_images_colors(images, colorspace='rgb'):
+def analyze_images_colors(images, colorspace='rgb', subsampling=None):
     # analyze images and grab activations
     colors = []
     for image_path in images:
         try:
-            c = get_average_color(image_path, colorspace)
+            if subsampling is None:
+                c = get_average_color_classic(image_path, colorspace)
+            else:
+                c = get_average_color(image_path, colorspace, subsampling)
         except Exception as e:
             print("Problem reading {}: {}".format(image_path, e))
             c = [0, 0, 0]
@@ -211,11 +250,11 @@ def analyze_images_colors(images, colorspace='rgb'):
     # colors = normalize_columns(colors)
     return colors
 
-def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False):
+def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False, subsampling=None):
     if model_name == 'color_lab':
-        return analyze_images_colors(images, colorspace='lab')
+        return analyze_images_colors(images, colorspace='lab', subsampling=subsampling)
     elif model_name == 'color' or model_name == 'color_rgb':
-        return analyze_images_colors(images, colorspace='rgb')
+        return analyze_images_colors(images, colorspace='rgb', subsampling=subsampling)
 
     num_images = len(images)
 
@@ -484,7 +523,7 @@ def run_prune(filelist, vectorlist):
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio, drop_to_fit, fill_shade,
-        vectors_file, do_prune,
+        vectors_file, do_prune, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, min_distance, max_distance, max_group_size, do_reload=False):
 
@@ -507,7 +546,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         if vectors_file is not None:
             X = read_json_vectors(vectors_file)
         else:
-            X = analyze_images(images, model, layer, pooling, do_crop)
+            X = analyze_images(images, model, layer, pooling, do_crop, subsampling)
 
         if do_prune:
             images, X = run_prune(images, X)
@@ -676,7 +715,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             im_width = img.size[0]
             im_height = img.size[1]
 
-        im_array = np.full([im_width, im_height, 3], [fill_shade, fill_shade, fill_shade]).astype(np.uint8)
+        im_array = np.full([im_height, im_width, 3], [fill_shade, fill_shade, fill_shade]).astype(np.uint8)
         # im_array = np.zeros([im_width, im_height, 3]).astype(np.uint8)
         blank_img = Image.fromarray(im_array)
         blank_image_path = os.path.join(output_path, "blank.png")
@@ -766,6 +805,8 @@ def main():
                         help="optional override to set custom model layer")
     parser.add_argument('--pooling', default=None,
                         help="optional override to control inceptionv3 pooling (avg or max)")
+    parser.add_argument('--subsampling', default=None,
+                        help="subsampling specifier for tiles (for some models). eg: 2+")
     parser.add_argument('--left-right-scale', default=4.0, type=float,
                         help="scaling factor for left-right axis")
     parser.add_argument('--output-path', 
@@ -782,7 +823,7 @@ def main():
                         help="Center crop instead of scale")
     parser.add_argument('--drop-to-fit', default=False, action='store_true',
                         help="Drop extra images to fit to aspect ratio")
-    parser.add_argument('--fill-shade', default=255, type=int,
+    parser.add_argument('--fill-shade', default=0, type=int,
                         help='shade of gray for filling in blanks')
     parser.add_argument('--use-imagemagick', default=False, action='store_true',
                         help="generate grid using imagemagick (montage)")
@@ -819,7 +860,7 @@ def main():
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.drop_to_fit, args.fill_shade, args.vectors, args.do_prune,
+             args.drop_to_fit, args.fill_shade, args.vectors, args.do_prune, args.subsampling,
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
              args.max_group_size, args.do_reload)
