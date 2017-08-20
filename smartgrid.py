@@ -514,7 +514,7 @@ def run_prune(filelist, vectorlist):
     new_filelist = []
     new_vectorlist = []
     for i in range(len(vectorlist)):
-        if vectorlist[i] is not None:
+        if vectorlist[i] is not None and os.path.exists(filelist[i]):
             new_filelist.append(filelist[i])
             new_vectorlist.append(vectorlist[i])
     print("Pruned filelist from {} to {} entries".format(len(filelist), len(new_filelist)))
@@ -810,7 +810,10 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             links = np.array(links)
             # normalize to 0-1
             if links_max_threshold is not None:
+                num_removed = (links > links_max_threshold).sum()
                 links[links > links_max_threshold] = -1
+                num_left = (links > 0).sum()
+                print("removed {} links, {} left".format(num_removed, num_left))
             links_max = np.amax(links)
             valid_vals = np.where(links > 0)
             links_min = np.amin(links[valid_vals])
