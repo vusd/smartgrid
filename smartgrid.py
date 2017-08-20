@@ -404,12 +404,12 @@ def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
                 cy = int(offset_y + height / 2)
                 cx = int(offset_x + width / 2)
                 if cell[0] > 0:
-                    link_right_height = max_link_size * cell[0]
+                    link_right_height = max_link_size * (1.0 - cell[0])
                     oy = int(link_right_height / 2)
                     ldw = int(link_right_height)
                     im_array[(cy-oy):(cy-oy+ldw), cx:(cx+width), :] = 0
                 if cell[1] > 0:
-                    link_down_width = max_link_size * cell[1]
+                    link_down_width = max_link_size * (1.0 - cell[1])
                     ox = int(link_down_width / 2)
                     lrw = int(link_down_width)
                     im_array[cy:(cy+height), (cx-ox):(cx-ox+lrw), :] = 0
@@ -520,12 +520,22 @@ def run_prune(filelist, vectorlist):
     print("Pruned filelist from {} to {} entries".format(len(filelist), len(new_filelist)))
     return new_filelist, np.array(new_vectorlist)
 
+# in the future the clip_range could be smarter,
+# like 1-4,100-200 etc.
+# for now, just doing head
+def run_clip(filelist, vectorlist, clip_range):
+    clip_number = int(clip_range)
+    new_filelist = filelist[:clip_number]
+    new_vectorlist = vectorlist[:clip_number]
+    return new_filelist, np.array(new_vectorlist)
+
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
         tsne_learning_rate, width, height, aspect_ratio, drop_to_fit, fill_shade,
-        vectors_file, do_prune, subsampling,
+        vectors_file, do_prune, clip_range, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
-        grid_spacing, show_links, min_distance, max_distance, max_group_size, do_reload=False):
+        grid_spacing, show_links, links_max_threshold,
+        min_distance, max_distance, max_group_size, do_reload=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -550,6 +560,9 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
         if do_prune:
             images, X = run_prune(images, X)
+
+        if clip_range:
+            images, X = run_clip(images, X, clip_range)
 
         # save data
         write_list(images, output_path, "image_files.txt")
@@ -629,6 +642,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             facecolors='none', edgecolors='g', marker='o', s=24*3)
     plt.savefig(os.path.join(output_path, "tsne.png"), bbox_inches='tight')
 
+    # this is an experimental section where left/right image can be given
     if left_image_index is not None:
         origin = data2d[left_image_index]
         data2d = data2d - origin
@@ -663,6 +677,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     write_list(data2d, output_path, "tsne_coords.txt")
 
+    # TSNE is done, setup layout for grid assignment
     max_width, max_height = 1, 1
     if (width > height):
         max_height = height / width
@@ -670,14 +685,15 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         max_width = width / height
     xv, yv = np.meshgrid(np.linspace(0, max_width, width), np.linspace(0, max_height, height))
     grid = np.dstack((xv, yv)).reshape(-1, 2)
+    # this strange step removes corners
     grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images)
-    print("G", grid.shape)
-    print("D2D", data2d.shape)
+    # print("G", grid.shape)
+    # print("D2D", data2d.shape)
 
     cost = distance.cdist(grid, data2d, 'euclidean')
     # cost = distance.cdist(grid, data2d, 'sqeuclidean')
     cost = cost * (100000. / cost.max())
-    print("C", cost.shape, cost[0][0])
+    # print("C", cost.shape, cost[0][0])
 
     if using_python_lap:
         print("Starting assignment (this can take a few minutes)")
@@ -708,8 +724,19 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     num_grid_spaces = len(indexed_lookup)
     num_actual_images = len(row_assigns2)
     num_missing = num_grid_spaces - num_actual_images
+    using_placeholder = False
 
     if num_missing > 0:
+        # makde a note that placeholder is in use
+        using_placeholder = True
+
+        # add a blank entry to the vectors
+        _, v_len = X.shape
+        X2 = np.append(X, [np.zeros(v_len)], axis=0)
+        print("Updating vectors from {} to {}".format(X.shape, X2.shape))
+        X = X2
+
+        # add blank entry to images
         # sniff the aspect ratio of the first file
         with Image.open(grid_images[0]) as img:
             im_width = img.size[0]
@@ -722,6 +749,8 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         blank_img.save(blank_image_path)
         blank_index = len(grid_images)
         grid_images.append(blank_image_path)
+
+        # now grow row assignments, giving all remaining to new blanks
         residuals = np.full([num_missing], blank_index)
         row_assigns2 = np.append(row_assigns2, residuals)
 
@@ -753,7 +782,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         links = None
         if show_links:
             links = []
-            img_grid_vectors = X[row_assigns2]
+            img_grid_vectors = X[image_indexes]
             for r in range(height):
                 row = []
                 links.append(row)
@@ -762,18 +791,26 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
                     cur_v = img_grid_vectors[idx]
                     if c < width - 1:
                         left_v = img_grid_vectors[idx+1]
-                        dist_left = np.linalg.norm(cur_v - left_v)
+                        if using_placeholder and (not cur_v.any() or not left_v.any()):
+                            dist_left = -1
+                        else:
+                            dist_left = np.linalg.norm(cur_v - left_v)
                     else:
                         dist_left = -1
                     if r < height - 1:
                         down_v = img_grid_vectors[idx+width]
-                        dist_down = np.linalg.norm(cur_v - down_v)
+                        if using_placeholder and (not cur_v.any() or not down_v.any()):
+                            dist_down = -1
+                        else:
+                            dist_down = np.linalg.norm(cur_v - down_v)
                     else:
                         dist_down = -1
                     cell = [dist_left, dist_down]
                     row.append(cell)
             links = np.array(links)
             # normalize to 0-1
+            if links_max_threshold is not None:
+                links[links > links_max_threshold] = -1
             links_max = np.amax(links)
             valid_vals = np.where(links > 0)
             links_min = np.amin(links[valid_vals])
@@ -799,6 +836,8 @@ def main():
                         help="read vectors directly instead of running model")
     parser.add_argument('--do-prune', default=False, action='store_true',
                         help="Prune filelist filtering if vectors missing")
+    parser.add_argument('--clip-range', default=None,
+                        help="only show range of images given (eg: 100)")
     parser.add_argument('--model', default=None,
                         help="model to use, one of: vgg16 vgg19 resnet50 inceptionv3 xception")
     parser.add_argument('--layer', default=None,
@@ -833,6 +872,8 @@ def main():
                         help='whitespace between images in grid')
     parser.add_argument('--show-links', default=False, action='store_true',
                         help="visualize link strength in whitespace")
+    parser.add_argument('--links-max-threshold', default=None, type=float,
+                        help="drop links past this threshold")
     parser.add_argument('--aspect-ratio', default=None, type=float,
                         help="Instead of square, fit image to given aspect ratio")
     parser.add_argument('--min-distance', default=None, type=float,
@@ -860,9 +901,11 @@ def main():
     run_grid(args.input_glob, args.left_image, args.right_image, args.left_right_scale,
              args.output_path, args.num_dimensions, 
              args.perplexity, args.learning_rate, width, height, args.aspect_ratio,
-             args.drop_to_fit, args.fill_shade, args.vectors, args.do_prune, args.subsampling,
+             args.drop_to_fit, args.fill_shade, args.vectors, args.do_prune, args.clip_range,
+             args.subsampling,
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
-             args.grid_spacing, args.show_links, args.min_distance, args.max_distance,
+             args.grid_spacing, args.show_links, args.links_max_threshold,
+             args.min_distance, args.max_distance,
              args.max_group_size, args.do_reload)
 
 if __name__ == '__main__':
