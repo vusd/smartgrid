@@ -403,12 +403,12 @@ def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
                 offset_y, offset_x = r*height+spacing*r, c*width+spacing*c
                 cy = int(offset_y + height / 2)
                 cx = int(offset_x + width / 2)
-                if cell[0] > 0:
+                if cell[0] >= 0:
                     link_right_height = max_link_size * (1.0 - cell[0])
                     oy = int(link_right_height / 2)
                     ldw = int(link_right_height)
                     im_array[(cy-oy):(cy-oy+ldw), cx:(cx+width), :] = 0
-                if cell[1] > 0:
+                if cell[1] >= 0:
                     link_down_width = max_link_size * (1.0 - cell[1])
                     ox = int(link_down_width / 2)
                     lrw = int(link_down_width)
