@@ -6,7 +6,6 @@ import os
 from os.path import isfile, join
 import keras
 from keras.preprocessing import image
-from keras.applications.imagenet_utils import decode_predictions
 from keras.models import Model
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -96,6 +95,7 @@ def get_average_color_classic(path, colorspace='rgb'):
         c = [c, c, c]
     return c
 
+np.seterr(all='raise')
 def get_average_color(path, colorspace='rgb', subsampling=None):
     im = scipy.misc.imread(path, mode='RGB')
     w, h, c = im.shape
@@ -118,8 +118,13 @@ def get_average_color(path, colorspace='rgb', subsampling=None):
                 quadrant = im[w1:w2, h1:h2, :]
 
                 if colorspace == 'lab':
-                    c = color.rgb2lab(quadrant)
-                    c = c.mean(axis=(0,1))
+                    try:
+                        c = color.rgb2lab(quadrant)
+                        c = c.mean(axis=(0,1))
+                    except RuntimeWarning:
+                        print("problem with ", path)
+                        print(quadrant.shape)
+                        c = np.array([0.0, 0.0, 0.0])
                 else:
                     c = quadrant.mean(axis=(0,1))
                     c = c / 255.0
@@ -514,11 +519,22 @@ def run_prune(filelist, vectorlist):
     new_filelist = []
     new_vectorlist = []
     for i in range(len(vectorlist)):
+        # if vectorlist[i] is not None:
         if vectorlist[i] is not None and os.path.exists(filelist[i]):
             new_filelist.append(filelist[i])
             new_vectorlist.append(vectorlist[i])
     print("Pruned filelist from {} to {} entries".format(len(filelist), len(new_filelist)))
     return new_filelist, np.array(new_vectorlist)
+
+# def run_filecheck(filelist, vectorlist):
+#     new_filelist = []
+#     new_vectorlist = []
+#     for i in range(len(vectorlist)):
+#         if os.path.exists(filelist[i]):
+#             new_filelist.append(filelist[i])
+#             new_vectorlist.append(vectorlist[i])
+#     print("Pruned filelist from {} to {} entries".format(len(filelist), len(new_filelist)))
+#     return new_filelist, np.array(new_vectorlist)
 
 # in the future the clip_range could be smarter,
 # like 1-4,100-200 etc.
@@ -528,6 +544,15 @@ def run_clip(filelist, vectorlist, clip_range):
     new_filelist = filelist[:clip_number]
     new_vectorlist = vectorlist[:clip_number]
     return new_filelist, np.array(new_vectorlist)
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
+
+def run_kmeans(images, X):
+    km = KMeans(n_clusters=100).fit(X)
+    closest, _ = pairwise_distances_argmin_min(km.cluster_centers_, X)
+    np_filelist = np.array(images)
+    return np_filelist[closest].tolist(), X[closest]
 
 def run_grid(input_glob, left_image, right_image, left_right_scale,
         output_path, tsne_dimensions, tsne_perplexity,
@@ -563,6 +588,8 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
         if clip_range:
             images, X = run_clip(images, X, clip_range)
+
+        # images, X = run_kmeans(images, X)
 
         # save data
         write_list(images, output_path, "image_files.txt")
@@ -618,7 +645,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     data = []
     for i,f in enumerate(grid_images):
-        point = [ (tsne[i,k] - np.min(tsne[:,k]))/(np.max(tsne[:,k]) - np.min(tsne[:,k])) for k in range(tsne_dimensions) ]
+        point = [ ((tsne[i,k] - np.min(tsne[:,k]))/(np.max(tsne[:,k]) - np.min(tsne[:,k]))).tolist() for k in range(tsne_dimensions) ]
         data.append({"path":grid_images[i], "point":point})
     with open(os.path.join(output_path, "points.json"), 'w') as outfile:
         json.dump(data, outfile)
