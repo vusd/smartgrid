@@ -17,6 +17,8 @@ import numbers
 import time
 from tqdm import tqdm
 from PIL import Image
+import tensorflow as tf
+import random
 
 import matplotlib
 matplotlib.use('Agg')
@@ -914,7 +916,16 @@ def main():
                         help='when max-distance, minimum number of additional members')
     parser.add_argument('--do-reload', default=False, action='store_true',
                         help="Reload file list and vectors from saved state")
+    parser.add_argument('--random-seed', default=None, type=int,
+                        help='Use a specific random seed (for repeatability)')
     args = parser.parse_args()
+
+    if args.random_seed:
+      print("Setting random seed: ", args.random_seed)
+      random.seed(args.random_seed)
+      np.random.seed(args.random_seed)
+      tf.set_random_seed(args.random_seed)
+
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
