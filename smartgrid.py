@@ -19,6 +19,7 @@ from tqdm import tqdm
 from PIL import Image
 import tensorflow as tf
 import random
+import umap
 
 import matplotlib
 matplotlib.use('Agg')
@@ -28,15 +29,15 @@ from braceexpand import braceexpand
 import glob
 
 # import with fallback behavior
-using_python_lap = False
+using_python_lap = True
 try:
-    # https://github.com/src-d/lapjv
-    import lapjv
+    # https://github.com/gatagat/lap
+    import lap
 except ImportError:
     try:
-        # https://github.com/dribnet/python-lap/tree/rename_lap
-        using_python_lap = True
-        import lap
+        # https://github.com/src-d/lapjv
+        import lapjv
+        using_python_lap = False
     except ImportError:
         print("Error: could not find lapjv or python-lap, cannot continue")
         sys.exit(1)
@@ -562,7 +563,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         vectors_file, do_prune, clip_range, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, links_max_threshold,
-        min_distance, max_distance, max_group_size, do_reload=False):
+        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -642,8 +643,13 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     X = np.asarray(X[:num_grid_images])
 
     print("SO X {}".format(X.shape))
-    print("Running t-SNE on {} images...".format(num_grid_images))
-    tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
+    if do_tsne:
+        print("Running tsne on {} images...".format(num_grid_images))
+        tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
+    else:
+        print("Running umap on {} images...".format(num_grid_images))
+        tsne = umap.UMAP().fit_transform(X)
+    print("EMBEDDING SHAPE {}".format(tsne.shape))
 
     data = []
     for i,f in enumerate(grid_images):
@@ -916,6 +922,8 @@ def main():
                         help='when max-distance, minimum number of additional members')
     parser.add_argument('--do-reload', default=False, action='store_true',
                         help="Reload file list and vectors from saved state")
+    parser.add_argument('--do-tsne', default=False, action='store_true',
+                        help="Run tsne instead of umap")
     parser.add_argument('--random-seed', default=None, type=int,
                         help='Use a specific random seed (for repeatability)')
     args = parser.parse_args()
@@ -947,7 +955,7 @@ def main():
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.links_max_threshold,
              args.min_distance, args.max_distance,
-             args.max_group_size, args.do_reload)
+             args.max_group_size, args.do_reload, args.do_tsne)
 
 if __name__ == '__main__':
     main()

@@ -64,6 +64,10 @@ def main():
       np.random.seed(args.random_seed)
       tf.set_random_seed(args.random_seed)
 
+    # make output directory if needed
+    if not os.path.exists(args.output_path):
+        os.makedirs(args.output_path)
+
     for i in range(args.num_colors):
         generateRandColor(args.width, args.height, args.output_path)
 
