@@ -509,8 +509,10 @@ def filter_distance_max(images, X, max_distance, reject_dir=None, max_group_size
     X_array = np.array(X)
     return im_array[assignments].tolist(), X_array[assignments]
 
-def reduce_grid_targets(grid, num_grid_images):
-    print("reducing grid from {} to {}".format(len(grid), num_grid_images))
+def reduce_grid_targets(grid, num_grid_images, do_reduce_hack):
+    if do_reduce_hack:
+        num_grid_images = len(grid) - 1
+        print("reducing grid from {} to {}".format(len(grid), num_grid_images))
     mean_point = np.mean(grid, axis=0)
     newList = grid - mean_point
     sort = np.sum(np.power(newList, 2), axis=1)
@@ -563,7 +565,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         vectors_file, do_prune, clip_range, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, links_max_threshold,
-        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False):
+        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False, do_reduce_hack=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -675,7 +677,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         plt.scatter(data2d[right_image_index:right_image_index+1,0],
             data2d[right_image_index:right_image_index+1,1],
             facecolors='none', edgecolors='g', marker='o', s=24*3)
-    plt.savefig(os.path.join(output_path, "tsne.png"), bbox_inches='tight')
+    plt.savefig(os.path.join(output_path, "embedding.png"), bbox_inches='tight')
 
     # this is an experimental section where left/right image can be given
     if left_image_index is not None:
@@ -708,9 +710,9 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             plt.scatter(data2d[right_image_index:right_image_index+1,0],
                 data2d[right_image_index:right_image_index+1,1],
                 facecolors='none', edgecolors='g', marker='o', s=48)
-        plt.savefig(os.path.join(output_path, "tsne_spun.png"), bbox_inches='tight')
+        plt.savefig(os.path.join(output_path, "embedding_spun.png"), bbox_inches='tight')
 
-    write_list(data2d, output_path, "tsne_coords.txt")
+    write_list(data2d, output_path, "embedding_coords.txt")
 
     # TSNE is done, setup layout for grid assignment
     max_width, max_height = 1, 1
@@ -721,7 +723,8 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     xv, yv = np.meshgrid(np.linspace(0, max_width, width), np.linspace(0, max_height, height))
     grid = np.dstack((xv, yv)).reshape(-1, 2)
     # this strange step removes corners
-    grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images)
+    grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images, do_reduce_hack)
+
     # print("G", grid.shape)
     # print("D2D", data2d.shape)
 
@@ -732,7 +735,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
 
     if using_python_lap:
         print("Starting assignment (this can take a few minutes)")
-        min_cost2, row_assigns2, col_assigns2 = lap.lapjv(cost)
+        min_cost2, row_assigns2, col_assigns2 = lap.lapjv(cost, extend_cost=do_reduce_hack)
         print("Assignment complete")
     else:
         # note slightly different API
@@ -924,6 +927,8 @@ def main():
                         help="Reload file list and vectors from saved state")
     parser.add_argument('--do-tsne', default=False, action='store_true',
                         help="Run tsne instead of umap")
+    parser.add_argument('--do-reduce-hack', default=False, action='store_true',
+                        help="allow holes (and remove one entry)")
     parser.add_argument('--random-seed', default=None, type=int,
                         help='Use a specific random seed (for repeatability)')
     args = parser.parse_args()
@@ -955,7 +960,8 @@ def main():
              model, layer, args.pooling, args.do_crop, args.grid_file, args.use_imagemagick,
              args.grid_spacing, args.show_links, args.links_max_threshold,
              args.min_distance, args.max_distance,
-             args.max_group_size, args.do_reload, args.do_tsne)
+             args.max_group_size, args.do_reload, args.do_tsne,
+             args.do_reduce_hack)
 
 if __name__ == '__main__':
     main()
