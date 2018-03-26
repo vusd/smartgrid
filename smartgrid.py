@@ -725,7 +725,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     # this strange step removes corners
     grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images, do_reduce_hack)
 
-    # print("G", grid.shape)
+    # print("G", grid.shape, grid[0])
     # print("D2D", data2d.shape)
 
     cost = distance.cdist(grid, data2d, 'euclidean')
@@ -796,6 +796,11 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     reverse_lookup[indexed_lookup] = np.arange(num_grid_spaces)
 
     image_indexes = row_assigns2[reverse_lookup]
+    img_grid_vectors = X[image_indexes]
+    g_len, g_dim = img_grid_vectors.shape
+    img_grid_shaped = img_grid_vectors.reshape(height, width, g_dim)
+    with open(os.path.join(output_path, "grid_vectors.json"), 'w') as outfile:
+        json.dump(img_grid_shaped.tolist(), outfile)
 
     n_images = np.asarray(grid_images)
     image_grid = n_images[image_indexes]
