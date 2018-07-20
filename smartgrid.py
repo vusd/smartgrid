@@ -225,7 +225,7 @@ def set_grid_size(images, width, height, aspect_ratio, drop_to_fit):
         print("Error: {} images is too many for {}x{} grid.".format(num_images, width, height))
         sys.exit(0)
     elif num_images == 0:
-        print("Error: no images in {}".format(input_glob))
+        print("Error: no images to process")
         sys.exit(0)
     elif num_grid_spaces == 0:
         print("Error: no spaces for images")
@@ -922,7 +922,7 @@ def main():
                         help="drop links past this threshold")
     parser.add_argument('--aspect-ratio', default=None, type=float,
                         help="Instead of square, fit image to given aspect ratio")
-    parser.add_argument('--min-distance', default=None, type=float,
+    parser.add_argument('--min-distance', default=0.00001, type=float,
                         help="Removed duplicates based on distance")
     parser.add_argument('--max-distance', default=None, type=float,
                         help="Removes items if they are beyond max from all others")
