@@ -258,7 +258,7 @@ def analyze_images_colors(images, colorspace='rgb', subsampling=None):
     # colors = normalize_columns(colors)
     return colors
 
-def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False, subsampling=None):
+def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False, subsampling=None, do_pca=False):
     if model_name == 'color_lab':
         return analyze_images_colors(images, colorspace='lab', subsampling=subsampling)
     elif model_name == 'color' or model_name == 'color_rgb':
@@ -312,11 +312,14 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
             activations.append(acts.flatten())
     # run PCA firt
     features = np.array(activations)
-    print("Running PCA on features: {}".format(features.shape))
-    pca = PCA(n_components=300)
-    pca.fit(features)
-    pca_features = pca.transform(features)
-    return np.asarray(pca_features)
+    if do_pca:
+        print("Running PCA on features: {}".format(features.shape))
+        pca = PCA(n_components=300)
+        pca.fit(features)
+        pca_features = pca.transform(features)
+        return np.asarray(pca_features)
+    else:
+        return features
 
 def fit_to_unit_square(points, width, height):
     x_scale = 1.0
@@ -565,7 +568,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         vectors_file, do_prune, clip_range, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, links_max_threshold,
-        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False, do_reduce_hack=False):
+        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False, do_reduce_hack=False, do_pca=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -934,6 +937,8 @@ def main():
                         help="Run tsne instead of umap")
     parser.add_argument('--do-reduce-hack', default=False, action='store_true',
                         help="allow holes (and remove one entry)")
+    parser.add_argument('--do-pca', default=False, action='store_true',
+                        help="run PCA on features before dimensionality reduction")
     parser.add_argument('--random-seed', default=None, type=int,
                         help='Use a specific random seed (for repeatability)')
     args = parser.parse_args()
@@ -966,7 +971,7 @@ def main():
              args.grid_spacing, args.show_links, args.links_max_threshold,
              args.min_distance, args.max_distance,
              args.max_group_size, args.do_reload, args.do_tsne,
-             args.do_reduce_hack)
+             args.do_reduce_hack, args.do_pca)
 
 if __name__ == '__main__':
     main()
