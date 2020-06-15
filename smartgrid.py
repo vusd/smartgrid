@@ -10,8 +10,8 @@ from keras.models import Model
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from scipy.spatial import distance
-import scipy
 from skimage import color
+import imageio
 import math
 import numbers
 import time
@@ -82,7 +82,7 @@ def get_image(path, input_shape, do_crop=False):
     return x
 
 def get_average_color_classic(path, colorspace='rgb'):
-    c = scipy.misc.imread(path, mode='RGB')
+    c = imageio.imread(path, pilmode='RGB')
     if colorspace == 'lab':
         # print("CONVERTING TO LAB")
         # old_color = c
@@ -100,7 +100,7 @@ def get_average_color_classic(path, colorspace='rgb'):
 
 np.seterr(all='raise')
 def get_average_color(path, colorspace='rgb', subsampling=None):
-    im = scipy.misc.imread(path, mode='RGB')
+    im = imageio.imread(path, pilmode='RGB')
     w, h, c = im.shape
     colors = []
     if subsampling is None:
@@ -265,28 +265,75 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
         return analyze_images_colors(images, colorspace='rgb', subsampling=subsampling)
 
     num_images = len(images)
-
-    preprocess_input = keras.applications.imagenet_utils.preprocess_input
-    input_shape = (224, 224)
     include_top = (layer_name is not None)
-    # make feature_extractor
-    if model_name == 'vgg16':
-        model = keras.applications.VGG16(weights='imagenet', include_top=include_top)
-    elif model_name == 'vgg19':
-        model = keras.applications.VGG19(weights='imagenet', include_top=include_top)
-    elif model_name == 'resnet50':
-        model = keras.applications.ResNet50(weights='imagenet', include_top=include_top)
-    elif model_name == 'inceptionv3':
-        model = keras.applications.InceptionV3(weights='imagenet', include_top=include_top, pooling=pooling)
-    elif model_name == 'xception':
-        model = keras.applications.Xception(weights='imagenet', include_top=include_top)
+
+    model_lookup_table = {
+        'densenet121': {
+            'model_class': keras.applications.densenet.DenseNet121,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.densenet.preprocess_input
+        },
+        'densenet169': {
+            'model_class': keras.applications.densenet.DenseNet169,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.densenet.preprocess_input
+        },
+        'densenet201': {
+            'model_class': keras.applications.densenet.DenseNet201,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.densenet.preprocess_input
+        },
+        'inceptionresnetv2': {
+            'model_class': keras.applications.inception_resnet_v2.InceptionResNetV2,
+            'input_shape': (299, 299),
+            'preprocess_input': keras.applications.inception_resnet_v2.preprocess_input
+        },
+        'inceptionv3': {
+            'model_class': keras.applications.inception_v3.InceptionV3,
+            'input_shape': (299, 299),
+            'preprocess_input': keras.applications.inception_v3.preprocess_input
+        },
+        'resnet50': {
+            'model_class': keras.applications.resnet.ResNet50,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.resnet.preprocess_input
+        },
+        'resnet101': {
+            'model_class': keras.applications.resnet.ResNet101,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.resnet.preprocess_input
+        },
+        'resnet152': {
+            'model_class': keras.applications.resnet.ResNet152,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.resnet.preprocess_input
+        },
+        'vgg16': {
+            'model_class': keras.applications.vgg16.VGG16,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.vgg16.preprocess_input
+        },
+        'vgg19': {
+            'model_class': keras.applications.vgg19.VGG19,
+            'input_shape': (224, 224),
+            'preprocess_input': keras.applications.vgg19.preprocess_input
+        },
+        'inceptionv3': {
+            'model_class': keras.applications.xception.Xception,
+            'input_shape': (299, 299),
+            'preprocess_input': keras.applications.xception.preprocess_input
+        },
+    }
+
+    if model_name in model_lookup_table:
+        model_class = model_lookup_table[model_name]['model_class']
+        input_shape = model_lookup_table[model_name]['input_shape']
+        preprocess_input = model_lookup_table[model_name]['preprocess_input']
     else:
         print("Error: model {} not found".format(model_name))
         sys.exit(1)
 
-    if model_name == 'inceptionv3' or model_name == 'xception':
-        preprocess_input = keras.applications.inception_v3.preprocess_input
-        input_shape = (299, 299)
+    model = model_class(weights='imagenet', include_top=include_top)
 
     if layer_name is None:
         feat_extractor = model
@@ -603,8 +650,6 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         write_list(images, output_path, "image_files.txt")
         write_list(X, output_path, "image_vectors.txt")
 
-    avg_colors = analyze_images_colors(images, 'rgb')
-
     ## Lookup left/right images
     left_image_index = None
     right_image_index = None
@@ -628,13 +673,13 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         X = X_new
 
     # TODO: filtering here
-    if min_distance is not None:
+    if min_distance is not None and min_distance > 0:
         reject_dir = os.path.join(output_path, "rejects_min")
         if reject_dir != '' and not os.path.exists(reject_dir):
             os.makedirs(reject_dir)
         images, X = filter_distance_min(images, X, min_distance, reject_dir)
 
-    if max_distance is not None:
+    if max_distance is not None and max_distance > 0:
         reject_dir = os.path.join(output_path, "rejects_max")
         if reject_dir != '' and not os.path.exists(reject_dir):
             os.makedirs(reject_dir)
@@ -655,6 +700,8 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         print("Running umap on {} images...".format(num_grid_images))
         tsne = umap.UMAP().fit_transform(X)
     print("EMBEDDING SHAPE {}".format(tsne.shape))
+
+    avg_colors = analyze_images_colors(images, 'rgb')
 
     data = []
     for i,f in enumerate(grid_images):
@@ -925,7 +972,7 @@ def main():
                         help="drop links past this threshold")
     parser.add_argument('--aspect-ratio', default=None, type=float,
                         help="Instead of square, fit image to given aspect ratio")
-    parser.add_argument('--min-distance', default=0.00001, type=float,
+    parser.add_argument('--min-distance', default=None, type=float,
                         help="Removed duplicates based on distance")
     parser.add_argument('--max-distance', default=None, type=float,
                         help="Removes items if they are beyond max from all others")
