@@ -18,6 +18,7 @@ import time
 from tqdm import tqdm
 from PIL import Image
 import tensorflow as tf
+import tensorflow_hub as hub
 import random
 import umap
 
@@ -65,7 +66,7 @@ def center_crop(img, target_size):
      img = img.resize(target_size)
      return img
 
-def get_image(path, input_shape, do_crop=False):
+def get_image(path, input_shape, do_crop=False, is_bit=False):
     if do_crop:
         # cropping version
         img = image.load_img(path)
@@ -78,7 +79,8 @@ def get_image(path, input_shape, do_crop=False):
     # img.save("sized.png")
     # print("DONE")
     x = image.img_to_array(img)
-    x = np.expand_dims(x, axis=0)
+    if not is_bit:
+        x = np.expand_dims(x, axis=0)
     return x
 
 def get_average_color_classic(path, colorspace='rgb'):
@@ -258,6 +260,14 @@ def analyze_images_colors(images, colorspace='rgb', subsampling=None):
     # colors = normalize_columns(colors)
     return colors
 
+def bit_preprocess_image(image):
+    image = np.array(image)
+    # reshape into shape [batch_size, height, width, num_channels]
+    img_reshaped = tf.reshape(image, [1, image.shape[0], image.shape[1], image.shape[2]])
+    # Use `convert_image_dtype` to convert to floats in the [0,1] range.
+    image = tf.image.convert_image_dtype(img_reshaped, tf.float32)
+    return image
+
 def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=False, subsampling=None, do_pca=False):
     if model_name == 'color_lab':
         return analyze_images_colors(images, colorspace='lab', subsampling=subsampling)
@@ -325,15 +335,21 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
         },
     }
 
-    if model_name in model_lookup_table:
+    is_bit = False
+    if model_name.startswith("bit"):
+        model_url = f"https://tfhub.dev/google/{model_name}/1"
+        input_shape = None
+        preprocess_input = bit_preprocess_image
+        model = hub.KerasLayer(model_url)
+        is_bit = True
+    elif model_name in model_lookup_table:
         model_class = model_lookup_table[model_name]['model_class']
         input_shape = model_lookup_table[model_name]['input_shape']
         preprocess_input = model_lookup_table[model_name]['preprocess_input']
+        model = model_class(weights='imagenet', include_top=include_top)
     else:
         print("Error: model {} not found".format(model_name))
         sys.exit(1)
-
-    model = model_class(weights='imagenet', include_top=include_top)
 
     if layer_name is None:
         feat_extractor = model
@@ -348,12 +364,15 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
     activations = []
     for idx in tqdm(range(len(images))):
         file_path = images[idx]
-        img = get_image(file_path, input_shape, do_crop);
+        img = get_image(file_path, input_shape, do_crop, is_bit);
         if img is not None:
             # preprocess
             img = preprocess_input(img)
             # print("getting activations for %s %d/%d" % (file_path,idx,num_images))
-            acts = feat_extractor.predict(img)[0]
+            if is_bit:
+                acts = model(img)[0].numpy()
+            else:
+                acts = feat_extractor.predict(img)[0]
             if len(activations) == 0:
                 print("Collecting vectors of size {}".format(acts.flatten().shape))
             activations.append(acts.flatten())
@@ -1000,8 +1019,8 @@ def main():
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
     if args.model is None and args.layer is None:
-        model = "vgg16"
-        layer = "fc2"
+        model = "bit/m-r101x1"
+        layer = None
     elif args.model is None:
         model = "vgg16"
         layer = args.layer
