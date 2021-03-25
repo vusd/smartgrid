@@ -336,12 +336,28 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
     }
 
     is_bit = False
+    is_clip = False
     if model_name.startswith("bit"):
         model_url = f"https://tfhub.dev/google/{model_name}/1"
         input_shape = None
         preprocess_input = bit_preprocess_image
         model = hub.KerasLayer(model_url)
         is_bit = True
+    elif model_name.startswith("clip"):
+        import clip
+        import torch
+        from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
+
+        model_type = "ViT-B/32"
+        if len(model_name) > 4:
+            parts = model_name.split(":")
+            model_type = parts[1]
+        model, preprocess = clip.load(model_type)
+        print(preprocess)
+        input_size = model.input_resolution.item()
+        input_shape = (input_size,input_size)
+        preprocess_input = None
+        is_clip = True
     elif model_name in model_lookup_table:
         model_class = model_lookup_table[model_name]['model_class']
         input_shape = model_lookup_table[model_name]['input_shape']
@@ -367,10 +383,22 @@ def analyze_images(images, model_name, layer_name=None, pooling=None, do_crop=Fa
         img = get_image(file_path, input_shape, do_crop, is_bit);
         if img is not None:
             # preprocess
-            img = preprocess_input(img)
+            if preprocess_input is not None:
+                img = preprocess_input(img)
             # print("getting activations for %s %d/%d" % (file_path,idx,num_images))
             if is_bit:
                 acts = model(img)[0].numpy()
+            elif is_clip:
+                batch_item = img[0]/255.0;
+                transform2 = Compose([
+                    ToTensor(),
+                    Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+                ])
+                zimages = []
+                im = transform2(batch_item)
+                zimages.append(im)
+                im_batch = torch.stack(zimages)
+                acts = model.encode_image(im_batch)[0].detach().cpu().numpy()
             else:
                 acts = feat_extractor.predict(img)[0]
             if len(activations) == 0:
@@ -442,7 +470,7 @@ def read_list(output_path, output_file, numeric=False):
     else:
         return lines
 
-def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
+def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None, do_hexgrid=False):
     """Convert an image grid to a single image"""
     N = len(filelist)
 
@@ -467,6 +495,10 @@ def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
 
     total_height = total_height + spacing * (rows - 1)
     total_width  = total_width + spacing * (cols - 1)
+    # shift every other row this much in x
+    hex_space = int(width / 2 + spacing)
+    if do_hexgrid:
+        total_width = total_width + hex_space
 
     im_array = np.zeros([total_height, total_width, 3]).astype(np.uint8)
     im_array.fill(255)
@@ -499,6 +531,8 @@ def make_grid_image(filelist, cols=None, rows=None, spacing=0, links=None):
             with Image.open(filelist[i]) as img:
                 rgb_im = img.convert('RGB')
                 offset_y, offset_x = r*height+spacing*r, c*width+spacing*c
+                if do_hexgrid and (r%2 == 0):
+                    offset_x += hex_space
                 im_array[offset_y:(offset_y+height), offset_x:(offset_x+width), :] = rgb_im
 
     return Image.fromarray(im_array)
@@ -634,7 +668,8 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         vectors_file, do_prune, clip_range, subsampling,
         model, layer, pooling, do_crop, grid_file, use_imagemagick,
         grid_spacing, show_links, links_max_threshold,
-        min_distance, max_distance, max_group_size, do_reload=False, do_tsne=False, do_reduce_hack=False, do_pca=False):
+        min_distance, max_distance, max_group_size, do_reload=False,
+        do_tsne=False, do_reduce_hack=False, do_pca=False, do_hexgrid=False):
 
     # make output directory if needed
     if output_path != '' and not os.path.exists(output_path):
@@ -733,7 +768,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         data2d = fit_to_unit_square(tsne, 1, 1)
     else:
         data2d = fit_to_unit_square(tsne, width, height)
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(12, 12))
     plt.xlim(-0.1, 1.1)
     plt.ylim(-0.1, 1.1)
     plt.gca().invert_yaxis()
@@ -790,6 +825,11 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
     elif(width < height):
         max_width = width / height
     xv, yv = np.meshgrid(np.linspace(0, max_width, width), np.linspace(0, max_height, height))
+    if do_hexgrid:
+        half_space = max_width  / (2 * width)
+        # print("RUNNING THE FUCKING HEXGRID ", half_space, xv)
+        xv[::2, :] += half_space
+        # print("RAN ", xv)
     grid = np.dstack((xv, yv)).reshape(-1, 2)
     # this strange step removes corners
     grid, indexed_lookup = reduce_grid_targets(grid, num_grid_images, do_reduce_hack)
@@ -811,7 +851,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         row_assigns2, col_assigns2, min_cost2 = lapjv.lapjv(cost, verbose=True, force_doubles=False)
     grid_jv2 = grid[col_assigns2]
     # print(col_assigns2.shape)
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(20, 20))
     plt.xlim(-0.1, 1.1)
     plt.ylim(-0.1, 1.1)
     plt.gca().invert_yaxis()
@@ -826,7 +866,6 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
                 data2d[right_image_index:right_image_index+1,1],
                 facecolors='none', edgecolors='g', marker='o', s=48)
     plt.savefig(os.path.join(output_path, 'movement.png'), bbox_inches='tight')
-
 
     num_grid_spaces = len(indexed_lookup)
     num_actual_images = len(row_assigns2)
@@ -932,7 +971,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
             print("Normalizing to {}/{}".format(links_min, links_max))
             links = ((links - links_min) / (links_max - links_min))
             print("Links is {}".format(links.shape))
-        img = make_grid_image(image_grid, width, height, grid_spacing, links)
+        img = make_grid_image(image_grid, width, height, grid_spacing, links, do_hexgrid)
         img.save(grid_file_path)
         if left_image_index is not None:
             img = make_grid_image([grid_images[left_image_index], grid_images[right_image_index]], 2, 1, 1)
@@ -1005,6 +1044,8 @@ def main():
                         help="allow holes (and remove one entry)")
     parser.add_argument('--do-pca', default=False, action='store_true',
                         help="run PCA on features before dimensionality reduction")
+    parser.add_argument('--do-hexgrid', default=False, action='store_true',
+                        help="shift even rows by half a cell size to make grid a hex grid")
     parser.add_argument('--random-seed', default=None, type=int,
                         help='Use a specific random seed (for repeatability)')
     args = parser.parse_args()
@@ -1013,11 +1054,12 @@ def main():
       print("Setting random seed: ", args.random_seed)
       random.seed(args.random_seed)
       np.random.seed(args.random_seed)
-      tf.set_random_seed(args.random_seed)
+      # tf.set_random_seed(args.random_seed)
 
     width, height = None, None
     if args.tile is not None:
         width, height = map(int, args.tile.split("x"))
+
     if args.model is None and args.layer is None:
         model = "bit/m-r101x1"
         layer = None
@@ -1037,7 +1079,7 @@ def main():
              args.grid_spacing, args.show_links, args.links_max_threshold,
              args.min_distance, args.max_distance,
              args.max_group_size, args.do_reload, args.do_tsne,
-             args.do_reduce_hack, args.do_pca)
+             args.do_reduce_hack, args.do_pca, args.do_hexgrid)
 
 if __name__ == '__main__':
     main()
