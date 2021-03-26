@@ -752,7 +752,7 @@ def run_grid(input_glob, left_image, right_image, left_right_scale,
         tsne = TSNE(n_components=tsne_dimensions, learning_rate=tsne_learning_rate, perplexity=tsne_perplexity, verbose=2).fit_transform(X)
     else:
         print("Running umap on {} images...".format(num_grid_images))
-        tsne = umap.UMAP().fit_transform(X)
+        tsne = umap.UMAP(metric='cosine', min_dist=0.9).fit_transform(X)
     print("EMBEDDING SHAPE {}".format(tsne.shape))
 
     avg_colors = analyze_images_colors(images, 'rgb')
